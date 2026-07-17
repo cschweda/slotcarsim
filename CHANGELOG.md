@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- ROADMAP.md — post-POC direction (more tracks, multiplayer, Tyco TCR mode).
 - Project scaffold: Vite + TypeScript (strict) + vitest, exact-pinned dependencies, Netlify static deploy config.
 - Fixed-timestep accumulator loop (`src/loop.ts`), with hidden-tab-safe reset, built test-first.
 - Sim/config purity guard (`src/sim/purity.test.ts`) mechanically enforcing that `src/sim/` and `src/config/` stay pure TypeScript, with no Three.js, DOM, or nondeterministic calls.

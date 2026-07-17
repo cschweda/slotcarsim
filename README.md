@@ -20,7 +20,7 @@ A photorealistic, browser-based simulation of 1970s Aurora AFX HO-scale slot car
 - An AI opponent with adjustable difficulty, and a full race mode with lap timing.
 - Gamepad (analog trigger) and keyboard input.
 
-This is a proof of concept, not a finished game — most of the above is not yet built. See the [design doc](docs/2026-07-17-slotcar-sim-design.md) for the full architecture and milestone plan.
+This is a proof of concept, not a finished game — most of the above is not yet built. See the [design doc](docs/2026-07-17-slotcar-sim-design.md) for the full architecture and milestone plan, and [ROADMAP.md](ROADMAP.md) for post-POC direction.
 
 ## Requirements
 
