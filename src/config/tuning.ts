@@ -30,6 +30,26 @@ export const TUNING = {
   steppedBands: 7,
   /** Keyboard throttle ramp rate while a throttle key is held, in 1/s. */
   keyboardRampRate: 2.5,
+  /** Lateral accel where slide begins, in m/s² (plain AFX seed; Magna-Traction reference ≈17). */
+  gripSoft: 8,
+  /** Lateral accel where deslot triggers (sustained), in m/s² (Magna-Traction reference ≈24). */
+  gripHard: 11,
+  /** First-order filter time constant on lateral demand ("chassis takes a set"), in s. */
+  latFilterTau: 0.05,
+  /** Slide yaw response time constant, in s. */
+  slideTau: 0.08,
+  /** Slide yaw magnitude per (m/s²) of over-soft lateral demand, in rad per (m/s²). */
+  yawPerAccel: 0.08,
+  /** Speed scrub while sliding: decel per (m/s²) over-soft, in (m/s²) per (m/s²). */
+  scrubPerAccel: 0.6,
+  /** Hard-limit must be exceeded continuously this long before deslot fires, in s. */
+  deslotDwell: 0.04,
+  /** Duration of the tumbling phase after deslot, in s. */
+  tumbleDuration: 1.1,
+  /** Duration of the waiting-for-marshal phase after tumbling, in s. */
+  marshalDuration: 0.9,
+  /** Ground friction decelerating the tumbling car, in m/s². */
+  tumbleFriction: 8,
 };
 
 /** The shape every sim/input/ui module reads tuning through — same object, never cloned. */
