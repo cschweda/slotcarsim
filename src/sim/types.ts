@@ -7,6 +7,23 @@ export interface InputFrame {
 }
 
 /**
+ * A car's tumble kinematics while off the track (phase 'tumbling'|'waiting').
+ * Plan-view position/velocity plus yaw/yawRate for the spin, and the lane
+ * arc-length `exitS` it re-slots at. Drawn from the world rng exactly once,
+ * at the moment of deslot (see sim/car/deslot.ts) — nothing after that is
+ * randomized, so the whole tumble is a deterministic function of that draw.
+ */
+export interface TumbleState {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  yaw: number;
+  yawRate: number;
+  exitS: number;
+}
+
+/**
  * Per-car simulation state along its lane path. No generation counter yet —
  * that arrives with M3's deslot/reslot (renderer needs it to snap instead of
  * lerping a teleport).
