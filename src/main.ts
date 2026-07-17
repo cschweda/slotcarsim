@@ -2,13 +2,16 @@ import { Mesh, MeshBasicMaterial, PlaneGeometry } from 'three';
 import { TRACKS } from './config/tracks';
 import { TUNING } from './config/tuning';
 import { createInputManager } from './input/inputManager';
-import { createLoop } from './loop';
+import { DEFAULT_DT, createLoop } from './loop';
+import type { CarPose } from './render/debugView';
 import { createDebugView } from './render/debugView';
 import { addLookDevContent } from './render/lookdev';
 import { createScene } from './render/scene';
-import { wrapLerp } from './sim/math';
+import { tumblePose } from './sim/car/deslot';
+import { lerp, wrapLerp } from './sim/math';
 import { buildTrack } from './sim/track/builder';
-import type { InputFrame, SimEvent } from './sim/types';
+import type { CarState, InputFrame, SimEvent } from './sim/types';
+import type { LanePath } from './sim/track/path';
 import { createSim } from './sim/world';
 import { createDebugPanel } from './ui/debugPanel';
 import { createHud } from './ui/hud';
@@ -94,6 +97,38 @@ function handlePlayerLapEvents(events: SimEvent[]): void {
   }
 }
 
+/**
+ * A car's render pose for this frame: sub-tick-interpolated lane position +
+ * heading + slideYaw while slotted, or the deslot state machine's tumblePose
+ * while tumbling/waiting (elevated, per the brief's crude M3 debug box).
+ *
+ * GENERATION GUARD: a reslot snaps CarState.s back to the exit point in the
+ * very same tick it bumps `generation`. Interpolating between that tick's
+ * prev (still off in the infield, mid-wait) and curr (back on the lane)
+ * would sweep the box across the table for one frame, so a generation
+ * change instead snaps straight to curr with no blending at all.
+ */
+function computeCarPose(prevState: CarState, currState: CarState, alpha: number, lane: LanePath): CarPose {
+  if (currState.phase !== 'slot') {
+    const pose = tumblePose(
+      { phase: currState.phase, phaseTicks: currState.phaseTicks, tumble: currState.tumble! },
+      TUNING,
+      DEFAULT_DT,
+    );
+    return { x: pose.pos.x, y: pose.pos.y, yaw: pose.yaw, elevated: true };
+  }
+
+  if (prevState.generation !== currState.generation) {
+    const { pos, heading } = lane.pointAt(currState.s);
+    return { x: pos.x, y: pos.y, yaw: heading + currState.slideYaw };
+  }
+
+  const s = wrapLerp(prevState.s, currState.s, alpha, lane.totalLength);
+  const slideYaw = lerp(prevState.slideYaw, currState.slideYaw, alpha);
+  const { pos, heading } = lane.pointAt(s);
+  return { x: pos.x, y: pos.y, yaw: heading + slideYaw };
+}
+
 let lastTimestamp: number | undefined;
 
 function frame(timestamp: number): void {
@@ -111,13 +146,12 @@ function frame(timestamp: number): void {
       const currentSim = sim; // narrowed const so the closure below is safe
       const prevStates = currentSim.prevCarStates();
       const currStates = currentSim.carStates();
-      const positions = currStates.map((curr, i) => {
+      const poses = currStates.map((curr, i) => {
         const prevState = prevStates[i]!;
         const lane = currentSim.laneFor(i);
-        const s = wrapLerp(prevState.s, curr.s, alpha, lane.totalLength);
-        return lane.pointAt(s).pos;
+        return computeCarPose(prevState, curr, alpha, lane);
       });
-      debugView.setDotPositions(positions);
+      debugView.setCarPoses(poses);
     }
 
     if (hud) {

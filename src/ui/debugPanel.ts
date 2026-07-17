@@ -22,7 +22,11 @@ type NumericTuningKey =
   | 'backEmfK'
   | 'brakeK'
   | 'rollingDrag'
-  | 'keyboardRampRate';
+  | 'keyboardRampRate'
+  | 'gripSoft'
+  | 'gripHard'
+  | 'yawPerAccel'
+  | 'scrubPerAccel';
 
 interface SliderSpec {
   key: NumericTuningKey;
@@ -39,6 +43,11 @@ const SLIDERS: SliderSpec[] = [
   { key: 'brakeK', min: 2, max: 16, step: 0.1 },
   { key: 'rollingDrag', min: 0, max: 1, step: 0.01 },
   { key: 'keyboardRampRate', min: 1, max: 6, step: 0.1 },
+  // M3 cornering/deslot constants (ranges per the M3 brief).
+  { key: 'gripSoft', min: 4, max: 30, step: 0.5 },
+  { key: 'gripHard', min: 6, max: 36, step: 0.5 },
+  { key: 'yawPerAccel', min: 0, max: 0.2, step: 0.005 },
+  { key: 'scrubPerAccel', min: 0, max: 2, step: 0.05 },
 ];
 
 const RESPONSE_MODES = ['authentic', 'linear', 'stepped'] as const;

@@ -1,7 +1,10 @@
 // Pure fixed-timestep accumulator loop. No DOM, no requestAnimationFrame —
 // callers (main.ts) own the rAF wiring and pass in frame deltas.
 
-const DEFAULT_DT = 1 / 120;
+// Exported so callers needing the sim's fixed tick outside a Loop instance
+// (e.g. main.ts's tumblePose calls, which aren't driven through step()) have
+// one source of truth instead of a second hardcoded 1/120 magic number.
+export const DEFAULT_DT = 1 / 120;
 const DEFAULT_MAX_FRAME_DELTA = 0.1;
 
 // 1/120 (and other fractional dt values) have no exact binary64
