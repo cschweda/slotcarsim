@@ -60,6 +60,22 @@ describe('createLoop', () => {
     expect(loop.tick).toBe(0);
   });
 
+  it('reset() preserves the tick counter', () => {
+    const step = vi.fn();
+    const loop = createLoop({ step });
+
+    loop.advance(3 * DT);
+    expect(step).toHaveBeenCalledTimes(3);
+    expect(loop.tick).toBe(3);
+
+    loop.reset();
+    expect(loop.tick).toBe(3);
+
+    loop.advance(0.9 * DT);
+    expect(step).toHaveBeenCalledTimes(3);
+    expect(loop.tick).toBe(3);
+  });
+
   it('passes step monotonically increasing consecutive integer ticks across multiple advance() calls', () => {
     const seenTicks: number[] = [];
     const loop = createLoop({
