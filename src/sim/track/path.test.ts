@@ -85,6 +85,8 @@ describe('createLanePath — wrap', () => {
     const b = circle.pointAt(0.1);
     expect(a.pos.x).toBeCloseTo(b.pos.x, 12);
     expect(a.pos.y).toBeCloseTo(b.pos.y, 12);
+    expect(wrapAngle(a.heading - b.heading)).toBeCloseTo(0, 12);
+    expect(a.curvature).toBeCloseTo(b.curvature, 12);
   });
 
   it('pointAt(−0.1) equals pointAt(totalLength − 0.1)', () => {
@@ -92,6 +94,8 @@ describe('createLanePath — wrap', () => {
     const b = circle.pointAt(totalLength - 0.1);
     expect(a.pos.x).toBeCloseTo(b.pos.x, 12);
     expect(a.pos.y).toBeCloseTo(b.pos.y, 12);
+    expect(wrapAngle(a.heading - b.heading)).toBeCloseTo(0, 12);
+    expect(a.curvature).toBeCloseTo(b.curvature, 12);
   });
 });
 
@@ -119,6 +123,32 @@ describe('createLanePath — oval (via builder)', () => {
         const after = lane.pointAt(sStar + EPS);
         expect(dist(before.pos, after.pos)).toBeLessThan(1e-5);
         expect(Math.abs(wrapAngle(after.heading - before.heading))).toBeLessThan(1e-5);
+      }
+    });
+  });
+
+  it('pointAt(totalLength) equals pointAt(0) with pos, heading, curvature continuous', () => {
+    const lane = track.lanes[0];
+    const a = lane.pointAt(lane.totalLength);
+    const b = lane.pointAt(0);
+    expect(a.pos.x).toBeCloseTo(b.pos.x, 12);
+    expect(a.pos.y).toBeCloseTo(b.pos.y, 12);
+    expect(wrapAngle(a.heading - b.heading)).toBeCloseTo(0, 12);
+    expect(a.curvature).toBeCloseTo(b.curvature, 12);
+  });
+
+  it('pointAt at interior piece boundary s* is continuous with s* + 1e-9', () => {
+    track.lanes.forEach((lane, laneIndex) => {
+      const boundaries = track.pieceBoundaries[laneIndex]!;
+      // Test one interior boundary (not the last, which wraps)
+      if (boundaries.length > 0) {
+        const sStar = boundaries[0]!;
+        const a = lane.pointAt(sStar);
+        const b = lane.pointAt(sStar + 1e-9);
+        expect(a.pos.x).toBeCloseTo(b.pos.x, 8);
+        expect(a.pos.y).toBeCloseTo(b.pos.y, 8);
+        expect(wrapAngle(a.heading - b.heading)).toBeCloseTo(0, 8);
+        expect(a.curvature).toBeCloseTo(b.curvature, 8);
       }
     });
   });
