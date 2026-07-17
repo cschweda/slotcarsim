@@ -118,7 +118,9 @@ describe('createSim — lap events', () => {
     const maxTicks = Math.ceil((L / v) * 3 * 120);
     for (let tick = 1; tick <= maxTicks && laps.length < 2; tick++) {
       const events = sim.step(DT, tick, []);
-      for (const e of events) laps.push(e.lapTimeSec);
+      for (const e of events) {
+        if (e.type === 'lap') laps.push(e.lapTimeSec);
+      }
     }
 
     expect(laps.length).toBeGreaterThanOrEqual(2);

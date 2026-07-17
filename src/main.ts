@@ -85,7 +85,7 @@ const loop = createLoop({
 
 function handlePlayerLapEvents(events: SimEvent[]): void {
   for (const event of events) {
-    if (event.carIndex !== 0) continue; // HUD tracks the player's laps only
+    if (event.type !== 'lap' || event.carIndex !== 0) continue; // HUD tracks the player's laps only
     lapCount = event.lapNumber;
     lastLapSec = event.lapTimeSec;
     if (bestLapSec === null || event.lapTimeSec < bestLapSec) {

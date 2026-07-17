@@ -4,14 +4,14 @@
 // step that wraps past s=0, linearly interpolate the fractional tick at which
 // the crossing actually happened (exact for constant-v motion within a step,
 // and a good approximation otherwise since steps are tiny relative to a lap).
-import type { SimEvent } from './types';
+import type { LapEvent } from './types';
 
 export interface LapTimer {
   /**
-   * Feed one sim step's before/after arc-length position. Returns a 'lap'
-   * SimEvent iff this step's forward motion wrapped past s=0, else null.
+   * Feed one sim step's before/after arc-length position. Returns a
+   * LapEvent iff this step's forward motion wrapped past s=0, else null.
    */
-  onStep(tickIndex: number, dt: number, sPrev: number, sNew: number): SimEvent | null;
+  onStep(tickIndex: number, dt: number, sPrev: number, sNew: number): LapEvent | null;
 }
 
 /**
@@ -23,7 +23,7 @@ export function createLapTimer(laneLength: number, carIndex = 0): LapTimer {
   let prevCrossTime = 0; // race start, per the brief
   let lapNumber = 0;
 
-  function onStep(tickIndex: number, dt: number, sPrev: number, sNew: number): SimEvent | null {
+  function onStep(tickIndex: number, dt: number, sPrev: number, sNew: number): LapEvent | null {
     const forwardDistance = (((sNew - sPrev) % laneLength) + laneLength) % laneLength;
     if (forwardDistance === 0) {
       return null; // stationary (on the line or anywhere else) — no crossing
