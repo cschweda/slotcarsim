@@ -8,7 +8,7 @@ The track system is already data-driven: each layout is simply an ordered list o
 
 - Larger ovals and road courses, using the full palette: 45° curves (in addition to current 90°), 6"/9"/12" radii combinations, longer straights (15"/9"/6"/3").
 - Chicane and slalom sequences (alternating left-right curves) that players recognize from real AFX sets and YouTube nostalgia clips.
-- Classic track shapes: the "Grand Stand" or "Drag Strip" figure-eight variants, the lane-crossing bridge (renderred as an elevated pass-under).
+- Over/under bridge layouts beyond the POC figure-eight: elevated pass-unders with pier supports, rendered with real height (the sim's flat 2D path model gains a per-piece elevation attribute).
 
 ## Multiplayer
 
@@ -32,6 +32,6 @@ A new game mode where cars can steer between lanes to pass and block, like class
 
 - **Local 2-player**: input is already per-player; only UI and a second gamepad/keyboard binding remain.
 - **Car-vs-car collision** at the figure-eight crossing (where slot paths intersect).
-- **Real AFX controller interface** via WebSerial + microcontroller firmware (authenticate a physical Tomy trigger as the throttle input).
+- **Real AFX controller interface** via WebSerial + microcontroller firmware — race with an actual vintage resistive pistol-grip controller in hand.
 - **Additional car body styles**: cosmetic variations (Magna-Traction models, non-AFX licensed designs if legal) and livery customization.
 - **Accessibility**: keyboard-only modes, visual/audio cues for deslot/lap events, remappable controls.
