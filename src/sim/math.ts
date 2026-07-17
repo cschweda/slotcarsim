@@ -51,3 +51,16 @@ export function clamp(x: number, lo: number, hi: number): number {
 export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
+
+/**
+ * Interpolate a car's arc-length position between two ticks on a closed loop
+ * of length L, taking the SHORT FORWARD hop rather than a naive lerp — cars
+ * only ever move forward, so a step that wraps past L back to a small value
+ * (e.g. a=9.9, b=0.1, L=10) must interpolate through the s=0 line, not
+ * backward across most of the lap. Returns a value in [0, L).
+ */
+export function wrapLerp(a: number, b: number, alpha: number, L: number): number {
+  const forwardDistance = (((b - a) % L) + L) % L;
+  const raw = a + forwardDistance * alpha;
+  return ((raw % L) + L) % L;
+}

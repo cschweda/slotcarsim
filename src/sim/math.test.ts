@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { add, clamp, dist, len, lerp, rot, scale, sub, wrapAngle } from './math';
+import { add, clamp, dist, len, lerp, rot, scale, sub, wrapAngle, wrapLerp } from './math';
 
 describe('wrapAngle', () => {
   it('leaves π unchanged (the upper bound is inclusive)', () => {
@@ -76,5 +76,46 @@ describe('lerp', () => {
     expect(lerp(0, 10, 0.5)).toBe(5);
     expect(lerp(0, 10, 0)).toBe(0);
     expect(lerp(0, 10, 1)).toBe(10);
+  });
+});
+
+describe('wrapLerp', () => {
+  it('interpolates linearly when there is no wrap', () => {
+    expect(wrapLerp(1, 2, 0.5, 10)).toBeCloseTo(1.5, 12);
+  });
+
+  it('alpha=0 returns a (mod L)', () => {
+    expect(wrapLerp(1, 2, 0, 10)).toBeCloseTo(1, 12);
+  });
+
+  it('alpha=1 returns b (mod L)', () => {
+    expect(wrapLerp(1, 2, 1, 10)).toBeCloseTo(2, 12);
+  });
+
+  it('takes the short forward hop across the L→0 wrap, not the long way backward', () => {
+    // a=9.9 moving forward to b=0.1 (car crossed the lap line): the forward
+    // distance is 0.2 (9.9 -> 10.0/0.0 -> 0.1), not the naive |b - a| = 9.8.
+    // Halfway across that 0.2 hop lands exactly on the line (s=0).
+    expect(wrapLerp(9.9, 0.1, 0.5, 10)).toBeCloseTo(0, 9);
+  });
+
+  it('a quarter-step across a wrap matches hand-computed arc length', () => {
+    // Forward distance from 2.8 to 0.2 (mod 2.84) is 0.24; a quarter of the
+    // way is 2.8 + 0.06 = 2.86, which wraps to 0.02.
+    expect(wrapLerp(2.8, 0.2, 0.25, 2.84)).toBeCloseTo(0.02, 9);
+  });
+
+  it('a stationary car exactly on the line (a=b=0) stays at 0 for any alpha', () => {
+    expect(wrapLerp(0, 0, 0.5, 10)).toBeCloseTo(0, 12);
+  });
+
+  it('result is always in [0, L)', () => {
+    for (let i = 0; i < 20; i++) {
+      const a = i * 0.37;
+      const b = (a + 1.3) % 5;
+      const result = wrapLerp(a % 5, b, 0.5, 5);
+      expect(result).toBeGreaterThanOrEqual(0);
+      expect(result).toBeLessThan(5);
+    }
   });
 });
