@@ -37,7 +37,7 @@ export function createScene(container: HTMLElement): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true });
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.15;
+  renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = true;
   // PCFSoftShadowMap is deprecated as of this pinned three version — it
   // silently downgrades to PCFShadowMap at runtime with a console warning
@@ -58,18 +58,24 @@ export function createScene(container: HTMLElement): SceneHandle {
   const environmentTexture = pmremGenerator.fromScene(new RoomEnvironment()).texture;
   pmremGenerator.dispose();
   scene.environment = environmentTexture;
+  // The RoomEnvironment IBL alone was overpowering the scene (verified by
+  // zeroing the direct lights and finding the ground/spheres barely dimmed)
+  // — it should read as fill/reflection information, not the key light.
+  // Chrome still samples the full environment texture for reflections;
+  // this only scales its lighting contribution.
+  scene.environmentIntensity = 0.35;
 
   const camera = new PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.05, 10);
   camera.position.set(0, 1.05, 0.72);
   camera.lookAt(0, 0, 0);
 
-  // Warm key light: a "room lamp" hanging over the table. Intensity tuned by
-  // eye against the RoomEnvironment IBL, which already supplies most of the
-  // scene's brightness (verified by zeroing this light and the fill below —
-  // the ground and spheres barely dim) — this keeps the direct light's
-  // contribution to a visible hot specular + shadow without blowing out the
-  // clearcoat sphere's base color.
-  const keyLight = new SpotLight(KEY_LIGHT_COLOR, 18, 0, 0.6, 0.5, 2);
+  // Warm key light: a "room lamp" hanging over the table. With the
+  // environment cut to fill-only (above), this light needs to carry the
+  // scene as the dominant source — a warm pool of light with visible
+  // falloff, not just a specular kicker on top of ambient. Tuned by eye
+  // (see fix-round-2 note in the M0 report) to read as saturated neon
+  // orange-red plastic under lamp light, not a daylight-studio wash.
+  const keyLight = new SpotLight(KEY_LIGHT_COLOR, 20, 0, 0.6, 0.5, 2);
   keyLight.position.set(0.6, 1.6, 0.4);
   keyLight.castShadow = true;
   keyLight.shadow.mapSize.set(2048, 2048);
@@ -78,8 +84,10 @@ export function createScene(container: HTMLElement): SceneHandle {
   scene.add(keyLight);
   scene.add(keyLight.target);
 
-  // Low-intensity cool-sky/warm-ground fill. Casts no shadows.
-  const fillLight = new HemisphereLight(FILL_SKY_COLOR, FILL_GROUND_COLOR, 0.6);
+  // Low-intensity cool-sky/warm-ground fill — this IS the "ambience away
+  // from the key light," so it's kept low enough that the spot reads as the
+  // clearly dominant source. Casts no shadows.
+  const fillLight = new HemisphereLight(FILL_SKY_COLOR, FILL_GROUND_COLOR, 0.28);
   scene.add(fillLight);
 
   function handleResize(): void {
