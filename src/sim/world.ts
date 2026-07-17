@@ -100,10 +100,9 @@ export function createSim(opts: CreateSimOptions): Sim {
       let newState: CarState;
 
       if (car.controlled === 'constant') {
-        // Pace-car placeholder: holds constantV exactly, never runs
-        // motor/cornering/deslot — always below both grip limits on lane 1,
-        // so leaving it on this simple path (unchanged since M2) is correct,
-        // not just convenient.
+        // Pace-car placeholder: holds constantV exactly and bypasses
+        // motor/cornering/deslot entirely, so grip limits never apply to it
+        // (at 1.5 m/s it would slide but not deslot on lane 1 if they did).
         const v = car.constantV ?? 0;
         const sNew = (((sPrev + v * dt) % lane.totalLength) + lane.totalLength) % lane.totalLength;
         newState = { ...state, s: sNew, v };
