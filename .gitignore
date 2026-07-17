@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.vscode/
+.superpowers/
+.DS_Store
