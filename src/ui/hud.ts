@@ -23,6 +23,8 @@ export interface HudUpdate {
   opponentLap?: number | null;
   /** M8: 1 (leading) or 2 (trailing) — set only in race mode (an opponent exists to rank against). */
   position?: 1 | 2;
+  /** M8: show the subtle "squeeze the trigger to connect a gamepad" hint — true until any gamepad has ever been seen. */
+  showGamepadHint?: boolean;
 }
 
 export interface Hud {
@@ -87,6 +89,16 @@ function ensureStyles(): void {
       opacity: 0.7;
       font-size: 11px;
       margin-top: 4px;
+    }
+    .m2-hud__gamepad-hint {
+      display: none;
+      margin-top: 4px;
+      font-size: 11px;
+      opacity: 0.55;
+      font-style: italic;
+    }
+    .m2-hud__gamepad-hint--active {
+      display: block;
     }
     .m2-hud__muted-badge {
       display: none;
@@ -153,11 +165,14 @@ export function createHud(container: HTMLElement): Hud {
   opponentLine.className = 'm2-hud__source';
   const sourceLine = document.createElement('div');
   sourceLine.className = 'm2-hud__source';
+  const gamepadHintLine = document.createElement('div');
+  gamepadHintLine.className = 'm2-hud__gamepad-hint';
+  gamepadHintLine.textContent = 'Squeeze the trigger to connect a gamepad';
   const mutedBadge = document.createElement('div');
   mutedBadge.className = 'm2-hud__muted-badge';
   mutedBadge.textContent = 'MUTED';
 
-  panel.append(lapLine, timesLine, opponentLine, sourceLine, mutedBadge);
+  panel.append(lapLine, timesLine, opponentLine, sourceLine, gamepadHintLine, mutedBadge);
   root.appendChild(panel);
 
   const bar = document.createElement('div');
@@ -198,6 +213,7 @@ export function createHud(container: HTMLElement): Hud {
       opponentLine.textContent = `AI ${state.opponentLap}${state.lapTarget ? `/${state.lapTarget}` : ''}`;
     }
     sourceLine.textContent = state.sourceLabel;
+    gamepadHintLine.classList.toggle('m2-hud__gamepad-hint--active', state.showGamepadHint === true);
     mutedBadge.classList.toggle('m2-hud__muted-badge--active', state.muted);
 
     const clamped = Math.min(1, Math.max(0, state.throttle));

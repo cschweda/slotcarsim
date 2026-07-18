@@ -10,6 +10,21 @@ import type { ThrottleSource } from './types';
 export interface InputManager {
   readPlayerThrottle(dt: number): number;
   activeSourceLabel(): string;
+  /**
+   * M8: polls the gamepad directly (bypassing keyboard entirely), so
+   * connection detection and the calibration wizard can progress even
+   * outside a race (menu, countdown) — callers should call EITHER this OR
+   * readPlayerThrottle each frame, never both, since each calls the
+   * gamepad's own read(dt) exactly once and calling it twice in the same
+   * frame would double-advance the calibration timer.
+   */
+  pollGamepad(dt: number): void;
+  /** M8: true once any gamepad has ever been seen this session — drives the HUD's "squeeze the trigger to connect" hint. */
+  everSeenGamepad(): boolean;
+  /** M8: true while the gamepad calibration wizard is sampling. */
+  gamepadCalibrating(): boolean;
+  /** M8: seconds remaining in the calibration window (0 when not calibrating). */
+  gamepadCalibrationSecondsLeft(): number;
 }
 
 export function createInputManager(): InputManager {
@@ -43,5 +58,16 @@ export function createInputManager(): InputManager {
     return activeSource().label;
   }
 
-  return { readPlayerThrottle, activeSourceLabel };
+  function pollGamepad(dt: number): void {
+    gamepad.read(dt);
+  }
+
+  return {
+    readPlayerThrottle,
+    activeSourceLabel,
+    pollGamepad,
+    everSeenGamepad: () => gamepad.everConnected,
+    gamepadCalibrating: () => gamepad.calibrating,
+    gamepadCalibrationSecondsLeft: () => gamepad.calibrationSecondsLeft,
+  };
 }

@@ -89,4 +89,35 @@ describe('createInputManager', () => {
     fakeWindow.dispatch('gamepadconnected');
     expect(manager.activeSourceLabel()).toBe('Gamepad'); // no readPlayerThrottle call yet
   });
+
+  // M8: outside a race (menu/countdown), main.ts calls pollGamepad() instead
+  // of readPlayerThrottle() so gamepad connection/calibration state can
+  // progress before the player starts racing, without ever touching the
+  // keyboard fallback's stateful ramp-up.
+  describe('pollGamepad (M8)', () => {
+    it('registers the gamepad as seen without needing a readPlayerThrottle call', () => {
+      stubPads([]);
+      vi.stubGlobal('window', new FakeWindow());
+      const manager = createInputManager();
+      expect(manager.everSeenGamepad()).toBe(false);
+
+      stubPads([standardPad(0.515)]);
+      manager.pollGamepad(1 / 60);
+      expect(manager.everSeenGamepad()).toBe(true);
+    });
+
+    it('never advances the keyboard ramp — a held key does not accumulate throttle while only pollGamepad is called', () => {
+      stubPads([]); // no gamepad at all — keyboard is the active source
+      const fakeWindow = new FakeWindow();
+      vi.stubGlobal('window', fakeWindow);
+      const manager = createInputManager();
+      fakeWindow.dispatch('keydown', { code: 'Space', preventDefault: () => {} });
+
+      // Simulate several "at the menu" frames: only pollGamepad, never readPlayerThrottle.
+      for (let i = 0; i < 30; i++) manager.pollGamepad(1 / 60);
+
+      // The keyboard's internal ramp must still be at 0 — pollGamepad never touched it.
+      expect(manager.readPlayerThrottle(0)).toBe(0);
+    });
+  });
 });

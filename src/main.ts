@@ -11,6 +11,7 @@ import { TUNING } from './config/tuning';
 import type { CarStyleId } from './render/carMesh';
 import type { RaceConfig, RaceMachine, TrackId } from './game/race';
 import { AI_CAR_INDEX, PLAYER_CAR_INDEX, createRace } from './game/race';
+import { rumbleOnDeslot, rumbleOnReslot } from './input/gamepad';
 import { createInputManager } from './input/inputManager';
 import { DEFAULT_DT, createLoop } from './loop';
 import type { CarRenderPose, CarsView } from './render/carsView';
@@ -79,6 +80,7 @@ let hud: ReturnType<typeof createHud> | undefined;
 let debugPanel: ReturnType<typeof createDebugPanel> | undefined;
 let menu: ReturnType<typeof createMenuSystem> | undefined;
 let countdown: CountdownOverlay | undefined;
+let calibrationOverlay: CalibrationOverlay | undefined;
 /** Rolling frame-time monitor that steps DPR/shadow quality down under sustained load and back up under sustained headroom (never above ?quality). */
 let qualityLadder: ReturnType<typeof createQualityLadder> | undefined;
 
@@ -124,6 +126,7 @@ if (showLookDev) {
   debugPanel = createDebugPanel(TUNING);
   menu = createMenuSystem(document.body);
   countdown = createCountdownOverlay(document.body);
+  calibrationOverlay = createCalibrationOverlay(document.body);
   qualityLadder = createQualityLadder(sceneHandle, quality);
 
   // A static default session sits behind the gate/menu so the table isn't empty.
@@ -411,6 +414,80 @@ function createCountdownOverlay(host: HTMLElement): CountdownOverlay {
   return { set, hide };
 }
 
+// ---- Gamepad calibration overlay ------------------------------------------
+
+const CALIBRATION_STYLE_ID = 'm8-calibration-style';
+
+function ensureCalibrationStyles(): void {
+  if (document.getElementById(CALIBRATION_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = CALIBRATION_STYLE_ID;
+  style.textContent = `
+    .m8-calibration {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+      text-align: center;
+      pointer-events: none;
+      user-select: none;
+      background: rgba(6, 6, 8, 0.55);
+    }
+    .m8-calibration__title {
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #ffb454;
+      text-shadow: 0 4px 18px rgba(0, 0, 0, 0.8);
+    }
+    .m8-calibration__sub {
+      font-size: 15px;
+      color: #e8e8e8;
+      opacity: 0.85;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+interface CalibrationOverlay {
+  /** Show/update the wizard while `active`; hides once `active` is false. */
+  set(active: boolean, secondsLeft: number): void;
+}
+
+function createCalibrationOverlay(host: HTMLElement): CalibrationOverlay {
+  ensureCalibrationStyles();
+
+  const el = document.createElement('div');
+  el.className = 'm8-calibration';
+  const title = document.createElement('div');
+  title.className = 'm8-calibration__title';
+  title.textContent = 'SQUEEZE AND RELEASE THE TRIGGER';
+  const sub = document.createElement('div');
+  sub.className = 'm8-calibration__sub';
+  el.append(title, sub);
+  host.appendChild(el);
+
+  let shown = false;
+
+  function set(active: boolean, secondsLeft: number): void {
+    if (active) {
+      shown = true;
+      sub.textContent = `Calibrating your gamepad… ${Math.max(0, Math.ceil(secondsLeft))}s`;
+      el.style.display = 'flex';
+    } else if (shown) {
+      shown = false;
+      el.style.display = 'none';
+    }
+  }
+
+  return { set };
+}
+
 // ---- Frame loop ----------------------------------------------------------
 
 let pendingInput: InputFrame = { throttle: 0 };
@@ -441,6 +518,15 @@ function handleAudioEvents(events: SimEvent[]): void {
     } else if (event.type === 'lap' && event.carIndex === PLAYER_CAR_INDEX) {
       sfx.lapBeep();
     }
+  }
+}
+
+/** Haptic feedback for the player's own car only — independent of the audio-unlock gate (works even before the start gate is clicked). */
+function handleRumbleEvents(events: SimEvent[]): void {
+  for (const event of events) {
+    if (event.carIndex !== PLAYER_CAR_INDEX) continue;
+    if (event.type === 'deslot') rumbleOnDeslot();
+    else if (event.type === 'reslot') rumbleOnReslot();
   }
 }
 
@@ -501,9 +587,18 @@ function frame(timestamp: number): void {
     qualityLadder?.sample(dtFrame * 1000);
     const phase = session.race.phase();
 
-    pendingInput = {
-      throttle: phase === 'racing' && inputManager ? inputManager.readPlayerThrottle(dtFrame) : 0,
-    };
+    // Outside a race (menu, countdown), poll the gamepad directly (never the
+    // keyboard, whose read() would otherwise ramp up its throttle while a
+    // key is merely being held at the menu) so connection detection and the
+    // calibration wizard can progress before the player ever starts racing —
+    // gamepads are invisible until a button press, and the wizard is meant
+    // to greet a new controller right away, not wait for a race to begin.
+    if (phase === 'racing' && inputManager) {
+      pendingInput = { throttle: inputManager.readPlayerThrottle(dtFrame) };
+    } else {
+      inputManager?.pollGamepad(dtFrame);
+      pendingInput = { throttle: 0 };
+    }
     frameEvents = [];
     frameBeeps = [];
 
@@ -511,6 +606,7 @@ function frame(timestamp: number): void {
 
     for (const beep of frameBeeps) sfx?.countdownBeep(beep.final);
     handleAudioEvents(frameEvents);
+    handleRumbleEvents(frameEvents);
 
     // Race finished this frame → show results once (session stays on the table).
     if (session.race.phase() === 'finished' && !resultsShown) {
@@ -553,6 +649,12 @@ function frame(timestamp: number): void {
     // Countdown overlay.
     countdown?.set(phase === 'countdown' ? countdownText(session.race.countdownNumber()) : null);
 
+    // Gamepad calibration overlay.
+    calibrationOverlay?.set(
+      inputManager?.gamepadCalibrating() ?? false,
+      inputManager?.gamepadCalibrationSecondsLeft() ?? 0,
+    );
+
     // HUD.
     if (hud) {
       const race = session.race;
@@ -574,6 +676,7 @@ function frame(timestamp: number): void {
               currStates[AI_CAR_INDEX]!.s,
             )
           : undefined,
+        showGamepadHint: inputManager ? !inputManager.everSeenGamepad() : false,
       });
     }
 
