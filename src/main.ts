@@ -316,40 +316,96 @@ function addGroundPlane(): void {
 
 // ---- Countdown overlay ---------------------------------------------------
 
+const COUNTDOWN_STYLE_ID = 'm8-countdown-style';
+/** How long "GO" stays visible once shown, regardless of how fast the race phase moves on to 'racing'. */
+const GO_HOLD_MS = 700;
+
+function ensureCountdownStyles(): void {
+  if (document.getElementById(COUNTDOWN_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = COUNTDOWN_STYLE_ID;
+  style.textContent = `
+    .m8-countdown {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+      font-size: 130px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: #fff4e6;
+      text-shadow: 0 0 30px rgba(255, 214, 170, 0.55), 0 4px 18px rgba(0, 0, 0, 0.7);
+      pointer-events: none;
+      user-select: none;
+    }
+    .m8-countdown--go {
+      color: #5ee06b;
+      text-shadow: 0 0 34px rgba(94, 224, 107, 0.6), 0 4px 18px rgba(0, 0, 0, 0.7);
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 interface CountdownOverlay {
+  /** Per-frame update: numbers show immediately; 'GO' holds visible for GO_HOLD_MS regardless of how fast the caller moves on to null (the race phase flips to 'racing' the same instant GO fires). */
   set(text: string | null): void;
+  /** Immediate hide, bypassing any pending GO hold — Esc-abort only. */
+  hide(): void;
 }
 function createCountdownOverlay(host: HTMLElement): CountdownOverlay {
+  ensureCountdownStyles();
   const el = document.createElement('div');
-  el.style.cssText = [
-    'position:fixed',
-    'inset:0',
-    'z-index:50',
-    'display:none',
-    'align-items:center',
-    'justify-content:center',
-    'font-family:SFMono-Regular,Menlo,Consolas,monospace',
-    'font-size:120px',
-    'font-weight:700',
-    'color:#9fd3ff',
-    'text-shadow:0 4px 24px rgba(0,0,0,0.8)',
-    'pointer-events:none',
-    'user-select:none',
-  ].join(';');
+  el.className = 'm8-countdown';
   host.appendChild(el);
   let last: string | null = null;
-  return {
-    set(text) {
-      if (text === last) return;
+  let goTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function show(text: string): void {
+    el.textContent = text;
+    el.classList.toggle('m8-countdown--go', text === 'GO');
+    el.style.display = 'flex';
+  }
+
+  function hide(): void {
+    clearTimeout(goTimer);
+    goTimer = undefined;
+    last = null;
+    el.style.display = 'none';
+  }
+
+  function set(text: string | null): void {
+    if (text === last) return;
+    if (text === 'GO') {
       last = text;
-      if (text === null) {
-        el.style.display = 'none';
-      } else {
-        el.textContent = text;
-        el.style.display = 'flex';
-      }
-    },
-  };
+      show(text);
+      clearTimeout(goTimer);
+      goTimer = setTimeout(() => {
+        goTimer = undefined;
+        if (last === 'GO') {
+          last = null;
+          el.style.display = 'none';
+        }
+      }, GO_HOLD_MS);
+      return;
+    }
+    if (text === null) {
+      if (goTimer !== undefined) return; // a GO hold is pending — it owns the eventual clear
+      last = null;
+      el.style.display = 'none';
+      return;
+    }
+    // A genuine new number (3/2/1): cancel any stray GO timer from a
+    // previous countdown and show it immediately.
+    clearTimeout(goTimer);
+    goTimer = undefined;
+    last = text;
+    show(text);
+  }
+
+  return { set, hide };
 }
 
 // ---- Frame loop ----------------------------------------------------------
@@ -537,7 +593,7 @@ window.addEventListener('keydown', (event) => {
     const phase = session.race.phase();
     if (phase === 'countdown' || phase === 'racing') {
       session.race.abort();
-      countdown?.set(null);
+      countdown?.hide();
       openMenu();
     }
     return;
