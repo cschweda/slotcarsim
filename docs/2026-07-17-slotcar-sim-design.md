@@ -95,3 +95,17 @@ Deterministic, sim-only vitest suites. Motor: stepped top speed matches closed-f
 - **Netlify**: `netlify.toml` — build `npm run build`, publish `dist/`. Pure static.
 - **Forge/nginx droplet**: static site, nginx root → `dist/` (deploy script: `npm ci && npm run build`). No PHP needed for v1; the Laravel side only enters with the future leaderboard/lobby.
 - Vite `base: './'` so the build works at any path.
+
+## As-built deviations (2026-07-18)
+
+Divergences between this doc and the shipped 0.1.0 build:
+
+- **Brake model**: pure `a = −brakeK·v`, no drag term (not `−(B_short·v + drag)` as written above) — resolves that formula's internal contradiction (an added constant term would break the claimed constant `dv/ds`) and preserves the exact closed-form `dv/ds = −brakeK` both the unit tests and the AI's backward pass depend on (`src/sim/car/motor.ts`).
+- **Shadows**: `PCFShadowMap`, not `PCFSoftShadowMap` — the latter is deprecated in the pinned three 0.185.1 and silently auto-downgrades to `PCFShadowMap` at runtime with a per-frame console warning; using it directly gives identical output with no warning (`src/render/scene.ts`).
+- **AI driver**: feedforward + P only, no derivative term — the motor's own back-EMF already damps the control loop, and a raw D term on the hard-driving/braking motor produced per-tick bang-bang throttle instead of a clean line (`src/sim/ai/driver.ts`).
+- **Magna-Traction**: descoped from v1 — `TUNING` is flat and both cars share the plain-AFX grip constants; Magna-Traction's reference values are left as comments for a future car-type selector (`src/config/tuning.ts`).
+- **Track draw calls**: ≤5 merged buckets (roadbed, slots, rails, seams, guardrails), not "~3" as estimated above.
+- **Figure-eight geometry**: uses one non-catalog 4.5″ adapter straight per lobe connector — geometrically forced, since catalog straights are all 3″ multiples and none can resolve the crossing's 4.5″ half-square offset.
+- **Headless AI determinism pins**: use difficulty 0.35, not 0.3; physics drift is guarded by pinned deslot counts and lap-time bands rather than a golden-lap snapshot.
+- **Gamepad disconnect**: surfaces as a HUD source-label change, not a toast.
+- **Architecture additions** not in the file tree above: `src/game/race.ts` (the race state machine) and `src/ui/overlays.ts` (countdown/calibration overlay factories).
