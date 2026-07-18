@@ -28,8 +28,11 @@ function baseState(overrides: Partial<CarState> = {}): CarState {
 }
 
 describe('reactionSeconds(difficulty)', () => {
-  it('spans 40–150 ms (d=1 → 40 ms, d=0 → 150 ms)', () => {
-    expect(reactionSeconds(1)).toBeCloseTo(0.04, 12);
+  // M9 humanization retune: the d=1 floor moved from 40 ms to 70 ms — even a
+  // "perfect" driver now reacts at a distinctly human pace, not a robotic
+  // instant. Deliberate change, not a regression.
+  it('spans 70–150 ms (d=1 → 70 ms, d=0 → 150 ms)', () => {
+    expect(reactionSeconds(1)).toBeCloseTo(0.07, 12);
     expect(reactionSeconds(0)).toBeCloseTo(0.15, 12);
     expect(reactionSeconds(0.35)).toBeGreaterThan(reactionSeconds(1));
     expect(reactionSeconds(0.35)).toBeLessThan(reactionSeconds(0));
@@ -37,9 +40,12 @@ describe('reactionSeconds(difficulty)', () => {
 });
 
 describe('noiseAmplitude(difficulty)', () => {
-  it('is ±3% at d=1 and ±8% at d=0.35', () => {
-    expect(noiseAmplitude(1)).toBeCloseTo(0.03, 12);
-    expect(noiseAmplitude(0.35)).toBeCloseTo(0.08, 12);
+  // M9 humanization retune: amplitudes roughly doubled (were ±3%/±8%) so the
+  // throttle tremor reads as visible breathing at every difficulty, not just
+  // numerical jitter. Deliberate change, not a regression.
+  it('is ±5% at d=1 and ±12% at d=0.35', () => {
+    expect(noiseAmplitude(1)).toBeCloseTo(0.05, 12);
+    expect(noiseAmplitude(0.35)).toBeCloseTo(0.12, 12);
   });
 });
 

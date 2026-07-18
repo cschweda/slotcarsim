@@ -22,8 +22,10 @@ import { buildSpeedProfile } from './speedProfile';
 /** How far ahead (seconds of travel) the driver reads the profile — anticipatory braking. */
 const LOOKAHEAD_SEC = 0.18;
 
-// Reaction delay ring: 40 ms at d=1 up to 150 ms at d=0 (the brief's 40–150 ms).
-const REACTION_MIN_SEC = 0.04;
+// Reaction delay ring: 70 ms at d=1 up to 150 ms at d=0. (M9 humanization
+// retune: the floor was 40 ms — even a "perfect" d=1 driver now reacts at a
+// distinctly human ~70 ms rather than a robotic instant.)
+const REACTION_MIN_SEC = 0.07;
 const REACTION_MAX_SEC = 0.15;
 
 // P gain on the speed-tracking error (the feedforward carries the steady
@@ -34,28 +36,58 @@ const REACTION_MAX_SEC = 0.15;
 // in the headless suite (d=1 holds its line cleanly, zero deslots).
 const KP = 1.8;
 
-// Low-pass throttle tremor. Amplitude ±3% at d=1 … ±8% at d=0.35; a short-ish
-// filter so the tremor wanders faster than the deslot dwell can accumulate a
-// sustained corner overshoot (keeps a clean d=1 driver clean).
+// Low-pass throttle tremor. Amplitude ±5% at d=1 … ±12% at d=0.35 (M9
+// humanization retune: was ±3%/±8% — up across the board so it reads as
+// visible breathing, not just numerical jitter); a short-ish filter so the
+// tremor wanders faster than the deslot dwell can accumulate a sustained
+// corner overshoot (keeps a clean d=1 driver clean).
 const NOISE_TAU = 0.09;
-const NOISE_AMP_AT_1 = 0.03;
-const NOISE_AMP_AT_035 = 0.08;
+const NOISE_AMP_AT_1 = 0.05;
+const NOISE_AMP_AT_035 = 0.12;
 
-// Scheduled brake-point misjudgment events.
-const EVENT_INTERVAL_LOW = [8, 20] as const; // difficulty ≤ 0.5: frequent
-const EVENT_INTERVAL_HIGH = [25, 45] as const; // difficulty > 0.5: rare
-const EVENT_BUMP = [0.12, 0.18] as const; // raw target-speed overshoot fraction
-const EVENT_DURATION = [0.35, 0.5] as const; // seconds
+// Scheduled brake-point misjudgment (overshoot) / early-lift (undershoot)
+// events. M9 humanization retune: both intervals are more frequent than
+// before (was [8,20]/[25,45]) — a "perfect" d=1 driver now visibly hesitates
+// or misjudges every 12–25s instead of 25–45s.
+const EVENT_INTERVAL_LOW = [7, 16] as const; // difficulty ≤ 0.5: frequent
+const EVENT_INTERVAL_HIGH = [12, 25] as const; // difficulty > 0.5: rarer, but still frequent
+const EVENT_BUMP = [0.12, 0.18] as const; // overshoot: raw target-speed bump fraction, still fallibility-scaled (unchanged — this is what keeps the d=1.0 zero-deslot guarantee)
+const EVENT_DURATION = [0.35, 0.5] as const; // overshoot duration, seconds
+// Undershoot (M9 new): braking early / lifting off on a straight — target
+// scaled DOWN, so it can never raise the car's speed above the safe profile
+// and therefore never risks a deslot at ANY difficulty. Applied at full
+// random magnitude regardless of difficulty (unlike overshoot, which is
+// fallibility-scaled) — this is deliberately what gives even a d=1.0
+// "perfect" driver visible personality, since its overshoot events are
+// scaled to zero effect.
+//
+// Deviation from the brief's stated 0.85–0.95, disclosed: the brief also asks
+// for a per-seed settled-lap-time spread of >=0.15s at EVERY difficulty,
+// including d=1.0/0.9 — but a single 0.85–0.95 event (the brief's literal
+// range), at ~0.4–0.8s against a ~1.75–1.8s lap, costs at most ~0.10–0.13s of
+// lap time (confirmed empirically across hundreds of seeds: noise amplitude
+// has almost no effect on this figure — a doubled noise amplitude moved the
+// observed spread by only a few thousandths, since the tremor's short 0.09s
+// tau averages out over a full lap; the event magnitude is what dominates).
+// Widening the lower bound to 0.78 (a 22% max lift/early-brake, up from 15%)
+// was the smallest change found empirically that makes >=0.15s reachable
+// (with margin) at every difficulty via a real, findable seed — see
+// headless.test.ts's "not a robot" pins for the exact (difficulty, seed)
+// pairs this was calibrated against.
+const UNDERSHOOT_MULTIPLIER = [0.78, 0.95] as const; // direct target multiplier (a 5–22% lift/early-brake)
+const UNDERSHOOT_DURATION = [0.4, 0.8] as const; // seconds
+/** Fraction of triggered events that are undershoot rather than overshoot. */
+const UNDERSHOOT_WEIGHT = 0.6;
 const EVENT_DIFFICULTY_SPLIT = 0.5;
 /** Reference difficulty at/below which a misjudgment lands with full force. */
 const FALLIBILITY_FLOOR_D = 0.35;
 
-/** Reaction-delay seconds for a difficulty (linear, 40 ms at d=1 → 150 ms at d=0). */
+/** Reaction-delay seconds for a difficulty (linear, 70 ms at d=1 → 150 ms at d=0). */
 export function reactionSeconds(difficulty: number): number {
   return REACTION_MAX_SEC - (REACTION_MAX_SEC - REACTION_MIN_SEC) * clamp(difficulty, 0, 1);
 }
 
-/** Throttle-tremor amplitude for a difficulty (±3% at d=1 … ±8% at d=0.35). */
+/** Throttle-tremor amplitude for a difficulty (±5% at d=1 … ±12% at d=0.35). */
 export function noiseAmplitude(difficulty: number): number {
   const t = (1 - difficulty) / (1 - FALLIBILITY_FLOOR_D); // 0 at d=1, 1 at d=0.35
   return NOISE_AMP_AT_1 + (NOISE_AMP_AT_035 - NOISE_AMP_AT_1) * clamp(t, 0, 1);
@@ -129,12 +161,21 @@ export function createAiDriver(
   function throttleFor(state: CarState, dt: number): number {
     clock += dt;
 
-    // --- Scheduled brake-point misjudgment ---
+    // --- Scheduled brake-point misjudgment (overshoot) / early-lift (undershoot) ---
+    // Two-sided (M9 humanization retune): ~60% of triggered events are
+    // undershoot (braking early / lifting off — always safe, so applied at
+    // full random magnitude regardless of difficulty) and ~40% are the
+    // original overshoot (still fallibility-scaled, so the d=1.0
+    // zero-deslot guarantee holds exactly as before).
     if (!eventActive && clock >= nextEventAt) {
-      const bump = rng.range(EVENT_BUMP[0], EVENT_BUMP[1]) * fall;
-      const duration = rng.range(EVENT_DURATION[0], EVENT_DURATION[1]);
-      eventMultiplier = 1 + bump;
-      eventEndsAt = clock + duration;
+      if (rng.next() < UNDERSHOOT_WEIGHT) {
+        eventMultiplier = rng.range(UNDERSHOOT_MULTIPLIER[0], UNDERSHOOT_MULTIPLIER[1]);
+        eventEndsAt = clock + rng.range(UNDERSHOOT_DURATION[0], UNDERSHOOT_DURATION[1]);
+      } else {
+        const bump = rng.range(EVENT_BUMP[0], EVENT_BUMP[1]) * fall;
+        eventMultiplier = 1 + bump;
+        eventEndsAt = clock + rng.range(EVENT_DURATION[0], EVENT_DURATION[1]);
+      }
       eventActive = true;
     } else if (eventActive && clock >= eventEndsAt) {
       eventActive = false;
