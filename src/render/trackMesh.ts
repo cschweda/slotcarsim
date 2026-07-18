@@ -319,7 +319,13 @@ function buildSeams(boundaries: { x: number; y: number; heading: number }[]): Bu
   return geometry;
 }
 
-/** Low-contrast procedural roughness variation so the plastic isn't dead-flat. Browser-only. */
+/**
+ * Procedural roughness variation so the plastic isn't dead-flat, especially
+ * up close. M8 visual polish: slightly stronger streak/grain amplitude than
+ * the M4 original (still centered on the same ~0.55 base — a close-up read
+ * as too uniform, not too smooth, so this widens the spread rather than
+ * shifting the mean). Browser-only.
+ */
 function makeRoughnessTexture(): Texture | undefined {
   if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
     return undefined;
@@ -335,8 +341,8 @@ function makeRoughnessTexture(): Texture | undefined {
   for (let y = 0; y < canvas.height; y++) {
     for (let x = 0; x < canvas.width; x++) {
       // Base ~0.55 with gentle streaks biased along u (x) for an aged-plastic sheen.
-      const streak = Math.sin(x * 0.19) * 6 + Math.sin(x * 0.037 + y * 0.11) * 5;
-      const grain = (Math.random() - 0.5) * 14;
+      const streak = Math.sin(x * 0.19) * 9 + Math.sin(x * 0.037 + y * 0.11) * 7;
+      const grain = (Math.random() - 0.5) * 22;
       const v = Math.max(0, Math.min(255, 140 + streak + grain));
       const i = (y * canvas.width + x) * 4;
       data[i] = v;

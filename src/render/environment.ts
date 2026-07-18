@@ -60,16 +60,18 @@ function makeWoodTexture(): Texture | undefined {
     ctx.fillRect(0, y, canvas.width, plankH);
   }
 
-  // Long grain streaks running along the planks (horizontal).
-  for (let i = 0; i < 2600; i++) {
+  // Long grain streaks running along the planks (horizontal). M8 visual
+  // polish: a bit more contrast/density than the M4 original — the lamp-lit
+  // area read as slightly flat close-up.
+  for (let i = 0; i < 3100; i++) {
     const y = Math.random() * canvas.height;
     const x = Math.random() * canvas.width;
     const len = 40 + Math.random() * 220;
-    const shade = Math.random() * 42 - 21;
+    const shade = Math.random() * 56 - 28;
     const tone = 0.5 + Math.random() * 0.3;
     ctx.strokeStyle = `rgba(${Math.round(70 * tone) + shade + 40},${
       Math.round(48 * tone) + shade + 24
-    },${Math.round(28 * tone) + shade + 12},0.28)`;
+    },${Math.round(28 * tone) + shade + 12},0.36)`;
     ctx.lineWidth = 0.5 + Math.random() * 1.4;
     ctx.beginPath();
     ctx.moveTo(x, y);
@@ -96,11 +98,11 @@ function makeWoodTexture(): Texture | undefined {
     ctx.stroke();
   }
 
-  // Fine grain noise.
+  // Fine grain noise. M8: a wider amplitude for a touch more grain contrast.
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const data = image.data;
   for (let p = 0; p < data.length; p += 4) {
-    const n = (Math.random() - 0.5) * 18;
+    const n = (Math.random() - 0.5) * 26;
     data[p] = Math.max(0, Math.min(255, data[p]! + n));
     data[p + 1] = Math.max(0, Math.min(255, data[p + 1]! + n));
     data[p + 2] = Math.max(0, Math.min(255, data[p + 2]! + n));
@@ -144,7 +146,12 @@ function makeWoodRoughness(): Texture | undefined {
   return texture;
 }
 
-/** Radial warm-to-black vignette so the floor reads as light falling into darkness. */
+/**
+ * Radial warm-to-black vignette so the floor reads as light falling into
+ * darkness. M8 visual polish: the mid stop moved outward and lightened
+ * slightly (0.4 -> 0.55, #221a12 -> #2a2015) — the falloff, particularly
+ * along the left edge of the established camera framing, read a touch heavy.
+ */
 function makeVignetteTexture(): Texture | undefined {
   if (typeof document === 'undefined' || typeof document.createElement !== 'function') return undefined;
   const canvas = document.createElement('canvas');
@@ -154,7 +161,7 @@ function makeVignetteTexture(): Texture | undefined {
   if (!ctx) return undefined;
   const g = ctx.createRadialGradient(256, 256, 20, 256, 256, 256);
   g.addColorStop(0, '#3a2c1c');
-  g.addColorStop(0.4, '#221a12');
+  g.addColorStop(0.55, '#2a2015');
   g.addColorStop(1, '#000000');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
