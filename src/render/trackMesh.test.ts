@@ -20,6 +20,7 @@ import {
   SLOT_HALF,
   arcSegmentCount,
   buildCrossingSquare,
+  buildPiers,
   createTrackMesh,
   curveGeometrySegments,
   guardrailPieceLayout,
@@ -294,5 +295,79 @@ describe('createTrackMesh (figure-8 crossing)', () => {
         expect(normal.getY(i)).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+describe('createTrackMesh (Daytona Sweep — M12 banking + elevation + piers)', () => {
+  const daytona = buildTrack(TRACKS.daytonaSweep.refs);
+
+  function roadbedMaxY(track: ReturnType<typeof buildTrack>): number {
+    const { group, dispose } = createTrackMesh(track);
+    try {
+      const road = group.children.find((c) => c.name === 'roadbed') as Mesh;
+      const pos = road.geometry.getAttribute('position');
+      let m = -Infinity;
+      for (let i = 0; i < pos.count; i++) m = Math.max(m, pos.getY(i));
+      return m;
+    } finally {
+      dispose();
+    }
+  }
+
+  it('adds a piers bucket for the elevated back stretch, staying within the updated ≤6 draw-call budget', () => {
+    // Deliberately updated from the flat tracks' ≤5: an elevated track gains ONE
+    // extra bucket (the merged pier columns). The oval/figure-8 tests above still
+    // pin ≤5 (they have no elevated pieces, so no pier mesh is created).
+    const { group, dispose } = createTrackMesh(daytona);
+    try {
+      const meshes = group.children.filter((c): c is Mesh => (c as Mesh).isMesh);
+      expect(meshes.length).toBe(group.children.length);
+      expect(meshes.length).toBeLessThanOrEqual(6);
+      expect(group.children.map((c) => c.name)).toContain('piers');
+      for (const child of group.children) expect(Array.isArray((child as Mesh).material)).toBe(false);
+    } finally {
+      dispose();
+    }
+  });
+
+  it('lofts the roadbed well above the flat plane where it banks and climbs (the flat oval does not)', () => {
+    expect(roadbedMaxY(daytona)).toBeGreaterThan(0.02); // banked outer edge (~24 mm) + elevated plateau (~25 mm)
+    expect(roadbedMaxY(buildTrack(TRACKS.oval.refs))).toBeLessThan(0.01); // flat: at ~ROAD_TOP (6 mm)
+  });
+
+  it('produces only finite geometry on every bucket (banking/elevation/piers introduce no NaNs)', () => {
+    const { group, dispose } = createTrackMesh(daytona);
+    try {
+      for (const child of group.children) {
+        const pos = (child as Mesh).geometry.getAttribute('position');
+        expect(pos.count).toBeGreaterThan(0);
+        for (let i = 0; i < pos.array.length; i++) expect(Number.isFinite(pos.array[i])).toBe(true);
+      }
+    } finally {
+      dispose();
+    }
+  });
+
+  it('buildPiers drops columns from the table (y=0) to the track underside (y=z)', () => {
+    const geom = buildPiers([
+      { x: 0, y: 0, z: 0.019, heading: 0 },
+      { x: 0.076, y: 0, z: 0.019, heading: 0 },
+      { x: 0.152, y: 0, z: 0.019, heading: 0 },
+    ]);
+    expect(geom).not.toBeNull();
+    const pos = geom!.getAttribute('position');
+    expect(pos.count).toBeGreaterThan(0);
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < pos.count; i++) {
+      minY = Math.min(minY, pos.getY(i));
+      maxY = Math.max(maxY, pos.getY(i));
+    }
+    expect(minY).toBe(0); // base at the table
+    expect(maxY).toBeCloseTo(0.019, 3); // top at the elevated track underside
+  });
+
+  it('buildPiers returns null when nothing is elevated (so flat tracks add no pier mesh)', () => {
+    expect(buildPiers([{ x: 0, y: 0, z: 0, heading: 0 }])).toBeNull();
   });
 });

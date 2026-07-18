@@ -64,12 +64,28 @@ export const MODULE_GAP = 0.0015; // ...with ~1.5 mm gaps between them
 
 const STRAIGHT_EPS = 1e-6; // |heading change| below this => a straight piece
 
+// ---- M12: banking + elevation ----
+// Fraction of a banked piece over which the RENDER bank eases in/out — purely
+// cosmetic (the physics bank is constant per piece; the car's lateral filter
+// smooths the on/off step, see car/cornering.ts). Easing is applied only at a
+// bank↔unbank TRANSITION (neighbour piece has a different roll), so a two-piece
+// 180° banked end reads as one continuous bank rather than dipping flat at its
+// middle joint.
+const BANK_EASE_FRACTION = 0.12;
+const ELEVATION_EPS = 1e-6; // |z| above this ⇒ the piece is "elevated" (gets piers)
+export const PIER_SPACING = 0.076; // ~76 mm between pier supports along an elevated run
+const PIER_BASE_HALF = 0.006; // tapered column: 12 mm at the table...
+const PIER_TOP_HALF = 0.0035; // ...7 mm where it meets the track underside
+const PIER_BRACE_HALF = 0.0012; // thin cross-brace hint spanning adjacent piers
+const PIER_MIN_HEIGHT = 0.004; // don't drop a degenerate sliver pier below this rise
+
 // Colors.
 const COLOR_ROAD = 0x1a1a1c;
 const COLOR_SLOT = 0x0a0a0b;
 const COLOR_RAIL = 0xb8b8bd;
 const COLOR_SEAM = 0x050506;
 const COLOR_GUARD = 0xefece2;
+const COLOR_PIER = 0xf3f1ea; // white AFX pier plastic
 
 /** The maximum tessellation chord deviation the arc sampler is allowed, in meters. */
 export const CHORD_TOL = 0.0002; // 0.2 mm
@@ -154,7 +170,9 @@ interface ProfileEdge {
 interface Station {
   x: number; // sim-plane centerline position
   y: number;
+  z: number; // M12: centerline elevation above the table (0 on flat pieces)
   heading: number; // centerline tangent, radians (CCW+)
+  bank: number; // M12: eased signed cross-section roll about the tangent (0 unbanked)
   u: number; // arc length along the path, for per-meter UV tiling
 }
 
@@ -239,13 +257,22 @@ function buildGuardrailProfile(): ProfileEdge[] {
 
 /** Map a cross-section point (across, height[, along tangent]) into three-space world coords. */
 function worldPoint(st: Station, across: number, height: number, along = 0): [number, number, number] {
+  // M12: roll the (across, height) cross-section about the path tangent by the
+  // eased bank, then loft it at the centerline elevation z. bank 0 / z 0 gives
+  // Math.cos(0)=1, Math.sin(0)=0 → the exact pre-M12 mapping (flat tracks
+  // unchanged). Pivot is the centerline at table level, so a banked roadbed
+  // tilts about the slot centreline like a real banked curve.
+  const cb = Math.cos(st.bank);
+  const sb = Math.sin(st.bank);
+  const ra = across * cb - height * sb; // rolled across-offset
+  const rh = across * sb + height * cb; // rolled height
   const nx = -Math.sin(st.heading); // left-normal in the sim plane (= +across direction)
   const ny = Math.cos(st.heading);
   const tx = Math.cos(st.heading);
   const ty = Math.sin(st.heading);
-  const sx = st.x + across * nx + along * tx;
-  const sy = st.y + across * ny + along * ty;
-  return [sx, height, -sy];
+  const sx = st.x + ra * nx + along * tx;
+  const sy = st.y + ra * ny + along * ty;
+  return [sx, st.z + rh, -sy];
 }
 
 /**
@@ -292,7 +319,7 @@ function sweepRibbon(stations: Station[], edge: ProfileEdge, flip = false): Buff
 }
 
 /** A dark cross-track quad at each piece joint, 0.1 mm proud of the roadbed. */
-function buildSeams(boundaries: { x: number; y: number; heading: number }[]): BufferGeometry {
+function buildSeams(boundaries: { x: number; y: number; z: number; heading: number; bank: number }[]): BufferGeometry {
   const positions: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
@@ -301,7 +328,7 @@ function buildSeams(boundaries: { x: number; y: number; heading: number }[]): Bu
   const h = ROAD_TOP + SEAM_PROUD;
 
   boundaries.forEach((bnd) => {
-    const st: Station = { x: bnd.x, y: bnd.y, heading: bnd.heading, u: 0 };
+    const st: Station = { x: bnd.x, y: bnd.y, z: bnd.z, heading: bnd.heading, bank: bnd.bank, u: 0 };
     const base = positions.length / 3;
     // Two "stations" offset along the tangent; across spans the roadbed width.
     positions.push(...worldPoint(st, aMin, h, -SEAM_HALF_LEN));
@@ -520,6 +547,99 @@ export function uniqueCrossings(track: Track): Array<{ center: Vec2; heading: nu
   return [...seen.values()];
 }
 
+// =====================================================================
+// M12: pier supports under an elevated section
+// =====================================================================
+// White AFX-style pier columns dropped from the table (three-y = 0) to the
+// track underside (three-y = z), spaced ~PIER_SPACING along the elevated
+// centerline, with a thin cross-brace hint linking consecutive piers. Built in
+// three-space directly (the samples are already sim→three-mapped by the
+// caller). Emitted into ONE geometry / material bucket so the whole pier set
+// costs a single extra draw call.
+
+/** A vertical tapered box (frustum) at three-space (cx, ·, cz), base y=0 → top y=h. */
+function pushPierColumn(sink: QuadSink, cx: number, cz: number, h: number): void {
+  const base = sink.positions.length / 3;
+  const b = PIER_BASE_HALF;
+  const t = PIER_TOP_HALF;
+  const corners: Array<[number, number, number]> = [
+    [cx - b, 0, cz - b], [cx + b, 0, cz - b], [cx + b, 0, cz + b], [cx - b, 0, cz + b], // base 0..3
+    [cx - t, h, cz - t], [cx + t, h, cz - t], [cx + t, h, cz + t], [cx - t, h, cz + t], // top 4..7
+  ];
+  for (const c of corners) sink.positions.push(c[0], c[1], c[2]);
+  for (let k = 0; k < 8; k++) sink.uvs.push(0, 0);
+  const quad = (a: number, bb: number, c: number, d: number): void => {
+    sink.indices.push(base + a, base + bb, base + c, base + a, base + c, base + d);
+  };
+  quad(0, 1, 5, 4); // −z side
+  quad(1, 2, 6, 5); // +x side
+  quad(2, 3, 7, 6); // +z side
+  quad(3, 0, 4, 7); // −x side
+  quad(4, 5, 6, 7); // top cap (+y)
+}
+
+/** A thin horizontal beam between two pier tops — the cross-brace hint. */
+function pushPierBrace(sink: QuadSink, ax: number, az: number, bx: number, bz: number, y: number): void {
+  const dx = bx - ax;
+  const dz = bz - az;
+  const len = Math.hypot(dx, dz);
+  if (len < 1e-6) return;
+  const ux = dx / len;
+  const uz = dz / len;
+  const px = -uz; // perpendicular in the x-z plane
+  const pz = ux;
+  const w = PIER_BRACE_HALF;
+  const base = sink.positions.length / 3;
+  const at = (along: number, side: number, vert: number): [number, number, number] => [
+    ax + ux * along + px * side * w,
+    y + vert * w,
+    az + uz * along + pz * side * w,
+  ];
+  const corners: Array<[number, number, number]> = [
+    at(0, -1, -1), at(len, -1, -1), at(len, 1, -1), at(0, 1, -1), // bottom 0..3
+    at(0, -1, 1), at(len, -1, 1), at(len, 1, 1), at(0, 1, 1), // top 4..7
+  ];
+  for (const c of corners) sink.positions.push(c[0], c[1], c[2]);
+  for (let k = 0; k < 8; k++) sink.uvs.push(0, 0);
+  const quad = (a: number, bb: number, c: number, d: number): void => {
+    sink.indices.push(base + a, base + bb, base + c, base + a, base + c, base + d);
+  };
+  quad(0, 1, 5, 4);
+  quad(1, 2, 6, 5);
+  quad(2, 3, 7, 6);
+  quad(3, 0, 4, 7);
+  quad(4, 5, 6, 7);
+  quad(3, 2, 1, 0);
+}
+
+/** Pier columns + braces under the elevated centerline samples (three-space), or null if none. */
+export function buildPiers(samples: { x: number; y: number; z: number; heading: number }[]): BufferGeometry | null {
+  if (samples.length < 2) return null;
+  const sink = newSink();
+  const placed: Array<{ cx: number; cz: number; z: number }> = [];
+  let acc = 0;
+  let nextAt = 0;
+  for (let i = 0; i < samples.length; i++) {
+    if (i > 0) {
+      acc += Math.hypot(samples[i]!.x - samples[i - 1]!.x, samples[i]!.y - samples[i - 1]!.y);
+    }
+    if (acc + 1e-9 >= nextAt) {
+      const s = samples[i]!;
+      if (s.z > PIER_MIN_HEIGHT) {
+        pushPierColumn(sink, s.x, -s.y, s.z); // sim (x,y) → three (x, ·, −y)
+        placed.push({ cx: s.x, cz: -s.y, z: s.z });
+      }
+      nextAt += PIER_SPACING;
+    }
+  }
+  for (let i = 1; i < placed.length; i++) {
+    const a = placed[i - 1]!;
+    const b = placed[i]!;
+    pushPierBrace(sink, a.cx, a.cz, b.cx, b.cz, 0.45 * Math.min(a.z, b.z));
+  }
+  return sinkToGeometry(sink);
+}
+
 export interface TrackMesh {
   group: Group;
   dispose(): void;
@@ -538,13 +658,29 @@ export function createTrackMesh(track: Track): TrackMesh {
   // track (the oval) is one run that wraps closed exactly as before.
   const runs: Station[][] = [];
   let currentRun: Station[] = [];
-  const boundaries: { x: number; y: number; heading: number }[] = [];
+  const boundaries: { x: number; y: number; z: number; heading: number; bank: number }[] = [];
   const guardGeoms: BufferGeometry[] = [];
+  // M12: centerline samples of the elevated pieces, in walk order, for the pier
+  // columns dropped under the bridge (built after the loop).
+  const elevatedSamples: { x: number; y: number; z: number; heading: number }[] = [];
 
   const guardLeft = buildGuardrailProfile();
   const guardRight = guardLeft.map(
     (e): ProfileEdge => ({ a0: -e.a0, h0: e.h0, a1: -e.a1, h1: e.h1, mat: e.mat }),
   );
+
+  // M12: per-piece signed mesh roll (−sign(κ)·bank magnitude), precomputed so the
+  // ease-in/out below can tell whether each NEIGHBOUR shares the same bank and
+  // therefore skip easing at a bank-to-bank internal joint (a two-piece 180°
+  // banked end then reads as one continuous bank, not a flat dip at its middle).
+  const pieceRoll: number[] = new Array(pieceCount);
+  for (let i = 0; i < pieceCount; i++) {
+    const s0Start = i === 0 ? 0 : b0[i - 1]!;
+    const s0End = b0[i]!;
+    const beta = lane0.pointAt((s0Start + s0End) / 2).bank ?? 0;
+    const sweep = wrapAngle(lane0.pointAt(s0End).heading - lane0.pointAt(s0Start).heading);
+    pieceRoll[i] = beta === 0 ? 0 : -Math.sign(sweep) * beta;
+  }
 
   let uAccum = 0;
   for (let i = 0; i < pieceCount; i++) {
@@ -571,14 +707,30 @@ export function createTrackMesh(track: Track): TrackMesh {
       continue;
     }
 
+    // M12 bank easing for this piece (cosmetic only — see BANK_EASE_FRACTION).
+    const roll = pieceRoll[i]!;
+    const prevRoll = pieceRoll[(i - 1 + pieceCount) % pieceCount]!;
+    const nextRoll = pieceRoll[(i + 1) % pieceCount]!;
+    const easeIn = roll !== 0 && prevRoll !== roll;
+    const easeOut = roll !== 0 && nextRoll !== roll;
+    const bankAt = (t: number): number => {
+      if (roll === 0) return 0;
+      if (easeIn && t < BANK_EASE_FRACTION) return roll * (t / BANK_EASE_FRACTION);
+      if (easeOut && t > 1 - BANK_EASE_FRACTION) return roll * ((1 - t) / BANK_EASE_FRACTION);
+      return roll;
+    };
+
     // Exact centerline sample at piece fraction t: midpoint of the two lanes.
+    // z is the centerline elevation (both lanes share it); bank is the eased roll.
     const sample = (t: number): Station => {
       const p0 = lane0.pointAt(s0Start + t * (s0End - s0Start));
       const p1 = lane1.pointAt(s1Start + t * (s1End - s1Start));
       return {
         x: (p0.pos.x + p1.pos.x) / 2,
         y: (p0.pos.y + p1.pos.y) / 2,
+        z: p0.z ?? 0,
         heading: p0.heading,
+        bank: bankAt(t),
         u: uAccum + t * centerLen,
       };
     };
@@ -588,8 +740,18 @@ export function createTrackMesh(track: Track): TrackMesh {
       currentRun.push(sample(j / segments));
     }
 
+    // Collect this piece's centerline samples for the piers if it is elevated.
+    const elevated = (lane0.pointAt(s0Start).z ?? 0) > ELEVATION_EPS || (lane0.pointAt(s0End).z ?? 0) > ELEVATION_EPS;
+    if (elevated) {
+      const pierRes = Math.max(2, Math.ceil((s0End - s0Start) / (PIER_SPACING / 2)));
+      for (let j = 0; j <= pierRes; j++) {
+        const st = sample(j / pierRes);
+        elevatedSamples.push({ x: st.x, y: st.y, z: st.z, heading: st.heading });
+      }
+    }
+
     const end = sample(1);
-    boundaries.push({ x: end.x, y: end.y, heading: end.heading });
+    boundaries.push({ x: end.x, y: end.y, z: end.z, heading: end.heading, bank: end.bank });
 
     if (!isStraight) {
       // Guardrails ride the OUTSIDE edge: −offset for a left turn, +offset for a right.
@@ -644,6 +806,12 @@ export function createTrackMesh(track: Track): TrackMesh {
   const guardGeom = mergeAndFinalize(guardGeoms);
   const seamGeom = boundaries.length > 0 ? buildSeams(boundaries) : null;
   seamGeom?.computeVertexNormals();
+  // M12: piers under the elevated back stretch — one extra bucket, and only on
+  // a track that actually has an elevated section (flat tracks stay at 5 draw
+  // calls; an elevated one is 6). See trackMesh.test.ts's deliberately-updated
+  // draw-call pin.
+  const pierGeom = elevatedSamples.length > 0 ? buildPiers(elevatedSamples) : null;
+  pierGeom?.computeVertexNormals();
 
   const roughnessMap = makeRoughnessTexture();
   const roadMat = new MeshPhysicalMaterial({
@@ -669,6 +837,7 @@ export function createTrackMesh(track: Track): TrackMesh {
     clearcoat: 0.15,
     clearcoatRoughness: 0.35,
   });
+  const pierMat = new MeshStandardMaterial({ color: COLOR_PIER, roughness: 0.7, metalness: 0 });
 
   const group = new Group();
   group.name = 'trackMesh';
@@ -701,6 +870,7 @@ export function createTrackMesh(track: Track): TrackMesh {
   addMesh('rails', railGeom, railMat, true);
   addMesh('seams', seamGeom, seamMat, false);
   addMesh('guardrails', guardGeom, guardMat, true);
+  addMesh('piers', pierGeom, pierMat, true);
 
   let disposed = false;
   const dispose = (): void => {
