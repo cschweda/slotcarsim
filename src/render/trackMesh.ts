@@ -12,6 +12,7 @@ import {
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { TUNING } from '../config/tuning';
+import type { Vec2 } from '../sim/math';
 import { wrapAngle } from '../sim/math';
 import type { Track } from '../sim/track/builder';
 import { PIECE_WIDTH } from '../sim/track/pieces';
@@ -42,6 +43,14 @@ export const RAIL_GAUGE = 0.0055; // each rail center is +-this from its slot ce
 export const RAIL_HALF = 0.00075; // rail 1.5 mm wide
 export const RAIL_PROUD = 0.0005; // rails stand this much proud of the roadbed
 const RAIL_TOP = ROAD_TOP + RAIL_PROUD;
+
+// ---- Crossing square (criss-cross) dimensions ----
+const IN = 0.0254;
+export const CROSS_HALF = 4.5 * IN; // half of the 9" square (0.1143 m)
+export const RAIL_GAP_HALF = 0.00125; // rails gap +-1.25 mm (a ~2.5 mm break) where they cross a perpendicular slot
+// Route-B rails ride a hair above route-A rails so their at-grade crossings
+// don't z-fight (one route bridges over the other, as real crossings do).
+const CROSS_RAIL_LIFT = 0.0001;
 
 export const SEAM_HALF_LEN = 0.0004; // seam strip 0.8 mm along the path
 const SEAM_PROUD = 0.0001; // 0.1 mm above the roadbed to avoid z-fighting
@@ -355,6 +364,156 @@ function mergeAndFinalize(geometries: BufferGeometry[]): BufferGeometry | null {
   return merged;
 }
 
+// =====================================================================
+// Crossing square (criss-cross)
+// =====================================================================
+// A hand-built 9"×9" roadbed square carrying BOTH perpendicular routes: a 3×3
+// grid of roadbed cells around a #-shaped pair of slot routes, with each
+// route's rails raised proud and BROKEN (~2.5 mm gaps) where they cross the
+// perpendicular route's slots — the authentic detail that lets a guide pin run
+// straight through. No guardrails. Geometry is emitted into the same
+// road/slot/rail material buckets as the swept track, so the crossing costs no
+// extra draw call. Built in a local frame (lx along route A, ly along route B)
+// then mapped to world/three coords.
+
+interface QuadSink {
+  positions: number[];
+  uvs: number[];
+  indices: number[];
+}
+
+function newSink(): QuadSink {
+  return { positions: [], uvs: [], indices: [] };
+}
+
+function sinkToGeometry(sink: QuadSink): BufferGeometry | null {
+  if (sink.positions.length === 0) return null;
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new Float32BufferAttribute(sink.positions, 3));
+  geometry.setAttribute('uv', new Float32BufferAttribute(sink.uvs, 2));
+  geometry.setIndex(sink.indices);
+  return geometry;
+}
+
+/** Local crossing coords (lx along route A, ly along route B, h up) → three-space. */
+function crossingPoint(center: Vec2, heading: number, lx: number, ly: number, h: number): [number, number, number] {
+  const c = Math.cos(heading);
+  const s = Math.sin(heading);
+  // ex = (c, s) along route A; ey = (−s, c) along route B (perpendicular).
+  const sx = center.x + lx * c - ly * s;
+  const sy = center.y + lx * s + ly * c;
+  return [sx, h, -sy];
+}
+
+/** An axis-aligned (in the local frame) flat quad at height h; wound so its face points up (+y). */
+function crossRect(
+  sink: QuadSink,
+  center: Vec2,
+  heading: number,
+  lxa: number,
+  lxb: number,
+  lya: number,
+  lyb: number,
+  h: number,
+): void {
+  const base = sink.positions.length / 3;
+  const corners: Array<[number, number]> = [
+    [lxa, lya],
+    [lxb, lya],
+    [lxb, lyb],
+    [lxa, lyb],
+  ];
+  for (const [lx, ly] of corners) sink.positions.push(...crossingPoint(center, heading, lx, ly, h));
+  sink.uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+  sink.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+}
+
+/**
+ * Split [min, max] into the segments left after cutting a ±gapHalf gap around
+ * each center — used to break a rail where it crosses the perpendicular slots.
+ */
+function segmentsWithGaps(min: number, max: number, centers: number[], gapHalf: number): Array<[number, number]> {
+  const cuts: number[] = [];
+  for (const c of centers) {
+    if (c - gapHalf > min && c - gapHalf < max) cuts.push(c - gapHalf);
+    if (c + gapHalf > min && c + gapHalf < max) cuts.push(c + gapHalf);
+  }
+  cuts.sort((a, b) => a - b);
+  const bounds = [min, ...cuts, max];
+  const segments: Array<[number, number]> = [];
+  for (let i = 0; i + 1 < bounds.length; i += 2) segments.push([bounds[i]!, bounds[i + 1]!]);
+  return segments;
+}
+
+interface CrossingGeoms {
+  road: BufferGeometry | null;
+  slot: BufferGeometry | null;
+  rail: BufferGeometry | null;
+}
+
+export function buildCrossingSquare(center: Vec2, heading: number): CrossingGeoms {
+  const road = newSink();
+  const slot = newSink();
+  const rail = newSink();
+
+  const H = CROSS_HALF;
+  const off = LANE_OFFSET; // slot centers, ± on each route
+  const sh = SLOT_HALF;
+  const slotCenters = [-off, off];
+
+  // --- Roadbed: a 3×3 grid of cells filling the square minus the slot lines. ---
+  const xCells: Array<[number, number]> = [
+    [-H, -off - sh],
+    [-off + sh, off - sh],
+    [off + sh, H],
+  ];
+  const yCells = xCells; // same partition on the perpendicular axis
+  for (const [xa, xb] of xCells) {
+    for (const [ya, yb] of yCells) crossRect(road, center, heading, xa, xb, ya, yb, ROAD_TOP);
+  }
+
+  // --- Slots: route A along lx at ly=±off (full), route B along ly at lx=±off
+  //     (broken at the intersections so the two never double-cover). Flush dark
+  //     fills tiling the grid gaps. ---
+  for (const cy of slotCenters) crossRect(slot, center, heading, -H, H, cy - sh, cy + sh, ROAD_TOP);
+  for (const cx of slotCenters) {
+    for (const [ya, yb] of segmentsWithGaps(-H, H, slotCenters, sh)) {
+      crossRect(slot, center, heading, cx - sh, cx + sh, ya, yb, ROAD_TOP);
+    }
+  }
+
+  // --- Rails: two per slot (±RAIL_GAUGE), raised, broken where they cross the
+  //     perpendicular route's slots. Route B rails ride a hair higher so their
+  //     at-grade crossings with route A rails don't z-fight. ---
+  for (const cy of slotCenters) {
+    for (const railC of [cy - RAIL_GAUGE, cy + RAIL_GAUGE]) {
+      for (const [xa, xb] of segmentsWithGaps(-H, H, slotCenters, RAIL_GAP_HALF)) {
+        crossRect(rail, center, heading, xa, xb, railC - RAIL_HALF, railC + RAIL_HALF, RAIL_TOP);
+      }
+    }
+  }
+  for (const cx of slotCenters) {
+    for (const railC of [cx - RAIL_GAUGE, cx + RAIL_GAUGE]) {
+      for (const [ya, yb] of segmentsWithGaps(-H, H, slotCenters, RAIL_GAP_HALF)) {
+        crossRect(rail, center, heading, railC - RAIL_HALF, railC + RAIL_HALF, ya, yb, RAIL_TOP + CROSS_RAIL_LIFT);
+      }
+    }
+  }
+
+  return { road: sinkToGeometry(road), slot: sinkToGeometry(slot), rail: sinkToGeometry(rail) };
+}
+
+/** Dedupe crossing pieces to unique physical squares by quantized world center (1 mm grid). */
+export function uniqueCrossings(track: Track): Array<{ center: Vec2; heading: number }> {
+  const seen = new Map<string, { center: Vec2; heading: number }>();
+  for (const piece of track.pieces) {
+    if (!piece.crossing) continue;
+    const key = `${Math.round(piece.center.x * 1000)},${Math.round(piece.center.y * 1000)}`;
+    if (!seen.has(key)) seen.set(key, { center: piece.center, heading: piece.heading });
+  }
+  return [...seen.values()];
+}
+
 export interface TrackMesh {
   group: Group;
   dispose(): void;
@@ -366,7 +525,13 @@ export function createTrackMesh(track: Track): TrackMesh {
   const b1 = track.pieceBoundaries[1];
   const pieceCount = b0.length;
 
-  const stations: Station[] = [];
+  // The roadbed profile is swept along RUNS of contiguous non-crossing pieces.
+  // A crossing piece breaks the run (its shared square is built separately, so
+  // the two perpendicular traversals aren't each swept as an ordinary strip
+  // that would double-render and cross rails without gaps). A crossing-free
+  // track (the oval) is one run that wraps closed exactly as before.
+  const runs: Station[][] = [];
+  let currentRun: Station[] = [];
   const boundaries: { x: number; y: number; heading: number }[] = [];
   const guardGeoms: BufferGeometry[] = [];
 
@@ -390,6 +555,16 @@ export function createTrackMesh(track: Track): TrackMesh {
     const isStraight = absSweep < STRAIGHT_EPS;
     const segments = isStraight ? 1 : curveGeometrySegments(centerLen / absSweep, absSweep);
 
+    if (track.pieces[i]?.crossing) {
+      // End the current run; the crossing square (built below) covers this span.
+      if (currentRun.length > 0) {
+        runs.push(currentRun);
+        currentRun = [];
+      }
+      uAccum += centerLen;
+      continue;
+    }
+
     // Exact centerline sample at piece fraction t: midpoint of the two lanes.
     const sample = (t: number): Station => {
       const p0 = lane0.pointAt(s0Start + t * (s0End - s0Start));
@@ -403,8 +578,8 @@ export function createTrackMesh(track: Track): TrackMesh {
     };
 
     for (let j = 0; j <= segments; j++) {
-      if (i > 0 && j === 0) continue; // this piece's start == previous piece's end
-      stations.push(sample(j / segments));
+      if (currentRun.length > 0 && j === 0) continue; // shared boundary with the previous piece in this run
+      currentRun.push(sample(j / segments));
     }
 
     const end = sample(1);
@@ -432,16 +607,29 @@ export function createTrackMesh(track: Track): TrackMesh {
 
     uAccum += centerLen;
   }
+  if (currentRun.length > 0) runs.push(currentRun);
 
-  // Sweep the roadbed profile once around the whole closed loop, bucketed by material.
+  // Sweep the roadbed profile along every run, bucketed by material.
   const roadGeoms: BufferGeometry[] = [];
   const slotGeoms: BufferGeometry[] = [];
   const railGeoms: BufferGeometry[] = [];
   for (const edge of buildRoadbedProfile()) {
-    const ribbon = sweepRibbon(stations, edge);
-    if (edge.mat === 'road') roadGeoms.push(ribbon);
-    else if (edge.mat === 'slot') slotGeoms.push(ribbon);
-    else railGeoms.push(ribbon);
+    for (const run of runs) {
+      if (run.length < 2) continue;
+      const ribbon = sweepRibbon(run, edge);
+      if (edge.mat === 'road') roadGeoms.push(ribbon);
+      else if (edge.mat === 'slot') slotGeoms.push(ribbon);
+      else railGeoms.push(ribbon);
+    }
+  }
+
+  // The shared criss-cross squares (deduped by center) — merged into the same
+  // road/slot/rail buckets, so they add no draw call.
+  for (const { center, heading } of uniqueCrossings(track)) {
+    const sq = buildCrossingSquare(center, heading);
+    if (sq.road) roadGeoms.push(sq.road);
+    if (sq.slot) slotGeoms.push(sq.slot);
+    if (sq.rail) railGeoms.push(sq.rail);
   }
 
   const roadGeom = mergeAndFinalize(roadGeoms);

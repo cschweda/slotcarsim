@@ -19,9 +19,11 @@ import {
   SLOT_DEPTH,
   SLOT_HALF,
   arcSegmentCount,
+  buildCrossingSquare,
   createTrackMesh,
   curveGeometrySegments,
   guardrailPieceLayout,
+  uniqueCrossings,
 } from './trackMesh';
 
 // The exact sagitta of one tessellated arc segment: for an arc of radius R
@@ -220,5 +222,58 @@ describe('createTrackMesh (oval)', () => {
     const { dispose } = createTrackMesh(track);
     expect(() => dispose()).not.toThrow();
     expect(() => dispose()).not.toThrow();
+  });
+});
+
+describe('createTrackMesh (figure-8 crossing)', () => {
+  const figure8 = buildTrack(TRACKS.figure8.refs);
+
+  it('dedupes the two cross9 traversals into ONE physical square', () => {
+    expect(uniqueCrossings(figure8)).toHaveLength(1);
+    // The oval has no crossings at all.
+    expect(uniqueCrossings(buildTrack(TRACKS.oval.refs))).toHaveLength(0);
+  });
+
+  it('still fits the ≤5 draw-call budget (the crossing merges into existing buckets)', () => {
+    const { group, dispose } = createTrackMesh(figure8);
+    try {
+      const meshes = group.children.filter((c): c is Mesh => (c as Mesh).isMesh);
+      expect(meshes.length).toBe(group.children.length);
+      expect(meshes.length).toBeLessThanOrEqual(5);
+      for (const child of group.children) {
+        expect(Array.isArray((child as Mesh).material)).toBe(false);
+      }
+    } finally {
+      dispose();
+    }
+  });
+
+  it('produces only finite (no-NaN), non-empty geometry', () => {
+    const { group, dispose } = createTrackMesh(figure8);
+    try {
+      for (const child of group.children) {
+        const geometry = (child as Mesh).geometry as BufferGeometry;
+        const position = geometry.getAttribute('position');
+        expect(position.count).toBeGreaterThan(0);
+        const array = position.array;
+        for (let i = 0; i < array.length; i++) expect(Number.isFinite(array[i])).toBe(true);
+      }
+    } finally {
+      dispose();
+    }
+  });
+
+  it('buildCrossingSquare emits road, slot and gapped-rail geometry with finite positions', () => {
+    const sq = buildCrossingSquare({ x: 0.1, y: -0.2 }, Math.PI / 5);
+    for (const geom of [sq.road, sq.slot, sq.rail]) {
+      expect(geom).not.toBeNull();
+      const pos = geom!.getAttribute('position');
+      expect(pos.count).toBeGreaterThan(0);
+      for (let i = 0; i < pos.array.length; i++) expect(Number.isFinite(pos.array[i])).toBe(true);
+    }
+    // Rails are BROKEN into segments (8 rails × 3 pieces = 24 quads = 96 verts):
+    // proof the ~2.5 mm gaps at the perpendicular slots are actually cut, not
+    // a single continuous rail. (Un-gapped would be 8 quads = 32 verts.)
+    expect(sq.rail!.getAttribute('position').count).toBe(96);
   });
 });
