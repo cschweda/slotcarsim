@@ -43,9 +43,16 @@ function stepSlot(
 ): StepCarResult {
   const L = lane.totalLength;
   const sPrev = state.s;
-  const { curvature } = lane.pointAt(sPrev);
+  const point = lane.pointAt(sPrev);
+  const curvature = point.curvature;
+  const grade = point.grade ?? 0;
+  const bank = point.bank ?? 0;
 
-  const a = carAccel(state.v, input.throttle, cfg);
+  // M12 grade term: gravity along the slope, −g·(dz/ds), applied in BOTH drive
+  // and brake (physics doesn't care about the trigger). On flat pieces grade is
+  // exactly 0, so `cfg.gravity * 0 === 0` and `a` is byte-identical to pre-M12.
+  // Semi-implicit order unchanged: accel at the current state, then v, then s.
+  const a = carAccel(state.v, input.throttle, cfg) - cfg.gravity * grade;
   const vMotor = Math.max(0, state.v + a * dt);
 
   const corner = stepCornering(
@@ -54,6 +61,7 @@ function stepSlot(
     curvature,
     dt,
     cfg,
+    bank,
   );
 
   const v = Math.max(0, vMotor - corner.scrubDecel * dt);

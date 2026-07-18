@@ -10,6 +10,7 @@
 // positive on a left turn, negative on a right turn, zero on a straight.
 import type { Tuning } from '../../config/tuning';
 import { clamp } from '../math';
+import { aLatEff } from './aLatEff';
 
 export interface CorneringState {
   /** First-order-filtered lateral demand, in m/s². */
@@ -36,8 +37,15 @@ export function stepCornering(
   kappa: number,
   dt: number,
   cfg: Tuning,
+  bank = 0,
 ): CorneringResult {
-  const aLat = v * v * Math.abs(kappa);
+  // M12: the raw v²·|κ| is replaced by the SHARED aLatEff (car/aLatEff.ts) —
+  // the same helper the AI's speed profile inverts, so a banked corner raises
+  // the deslot speed in lockstep with the line the AI plans. `bank` defaults to
+  // 0, and aLatEff(v, κ, 0, g) === v²·|κ| bit-for-bit, so every pre-M12 caller
+  // and flat-track tick is byte-identical. Everything downstream (filter, slide,
+  // scrub, dwell) consumes the effective demand unchanged.
+  const aLat = aLatEff(v, kappa, bank, cfg.gravity);
 
   const filterBlend = clamp(dt / cfg.latFilterTau, 0, 1);
   const aLatFiltered = state.aLatFiltered + (aLat - state.aLatFiltered) * filterBlend;

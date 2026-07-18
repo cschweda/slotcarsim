@@ -138,6 +138,37 @@ describe('stepCornering', () => {
     }
   });
 
+  it('M12: a 30° bank keeps a car slotted at a speed that deslots on the identical FLAT corner', () => {
+    const cfg: Tuning = { ...TUNING };
+    const rInner = 9 * IN - cfg.laneOffset; // ≈ 0.2096 m — the 9" inner lane
+    const kappa = 1 / rInner;
+    const bank = 0.5236; // 30°
+    // 1.9 m/s: above the flat deslot speed (≈1.518) but below the banked one (≈1.96).
+    const v = 1.9;
+    const ticks = Math.ceil((cfg.deslotDwell + 10 * cfg.latFilterTau) / DT);
+
+    // Flat: sustained over-limit → deslots.
+    let flat = freshState();
+    let flatDeslotted = false;
+    for (let i = 0; i < ticks; i++) {
+      const r = stepCornering(flat, v, kappa, DT, cfg, 0);
+      flat = { aLatFiltered: r.aLatFiltered, slideYaw: r.slideYaw, hardTicks: r.hardTicks };
+      if (r.deslotTriggered) flatDeslotted = true;
+    }
+    expect(flatDeslotted).toBe(true);
+
+    // 30° banked: the same speed sits safely below gripHard → never deslots.
+    let banked = freshState();
+    let bankedDeslotted = false;
+    for (let i = 0; i < ticks; i++) {
+      const r = stepCornering(banked, v, kappa, DT, cfg, bank);
+      banked = { aLatFiltered: r.aLatFiltered, slideYaw: r.slideYaw, hardTicks: r.hardTicks };
+      if (r.deslotTriggered) bankedDeslotted = true;
+    }
+    expect(bankedDeslotted).toBe(false);
+    expect(banked.aLatFiltered).toBeLessThan(cfg.gripHard);
+  });
+
   it('scrub decel is proportional to over-soft filtered demand: scrubPerAccel·over', () => {
     const cfg: Tuning = { ...TUNING };
     const r = 1;
