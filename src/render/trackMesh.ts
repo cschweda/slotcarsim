@@ -405,7 +405,14 @@ export function createTrackMesh(track: Track): TrackMesh {
     roughnessMap: roughnessMap ?? null,
   });
   const slotMat = new MeshPhysicalMaterial({ color: COLOR_SLOT, roughness: 0.7, metalness: 0 });
-  const railMat = new MeshPhysicalMaterial({ color: COLOR_RAIL, metalness: 1.0, roughness: 0.4 });
+  const railMat = new MeshPhysicalMaterial({
+    color: COLOR_RAIL,
+    metalness: 1.0,
+    roughness: 0.2,
+    // Rails are the brightest thing on the track — bias their environment
+    // reflection up so they read as bright streaks against the matte roadbed.
+    envMapIntensity: 3.5,
+  });
   const seamMat = new MeshStandardMaterial({ color: COLOR_SEAM, roughness: 0.85, metalness: 0 });
   const guardMat = new MeshPhysicalMaterial({
     color: COLOR_GUARD,

@@ -6,8 +6,10 @@ import {
   LineLoop,
   Mesh,
   MeshBasicMaterial,
+  MeshPhysicalMaterial,
   Scene,
   SphereGeometry,
+  type Material,
 } from 'three';
 import type { Track } from '../sim/track/builder';
 
@@ -50,10 +52,67 @@ export interface CarPose {
   elevated?: boolean;
 }
 
-export interface DebugView {
+export interface CarBoxes {
   /** poses[i] is car i's box pose, in sim (x, y, yaw) plan-view coordinates. */
   setCarPoses(poses: CarPose[]): void;
   dispose(): void;
+}
+
+export type DebugView = CarBoxes;
+
+/**
+ * 'debug' = flat unlit neon boxes (geometry-correctness view). 'plastic' =
+ * neutral dark PBR car bodies with a faint per-lane accent for the photoreal
+ * track — they sit as real objects (cast/receive shadow), not neon glows.
+ * Placeholder either way until M5 brings real car art.
+ */
+export type CarBoxStyle = 'debug' | 'plastic';
+
+// Muted per-lane body colors: clearly two little cars on the dark roadbed, but
+// aged-plastic tones rather than the debug neon.
+const PLASTIC_COLORS = ['#38597f', '#8a3b34'] as const; // lane 0 steel blue, lane 1 brick red
+
+export function createCarBoxes(scene: Scene, style: CarBoxStyle = 'debug'): CarBoxes {
+  const boxGeometry = new BoxGeometry(BOX_LENGTH, BOX_HEIGHT, BOX_WIDTH);
+  const materials: Material[] = [];
+  const carBoxes = LANE_COLORS.map((neon, i) => {
+    const material =
+      style === 'plastic'
+        ? new MeshPhysicalMaterial({
+            color: PLASTIC_COLORS[i] ?? '#2b2b2f',
+            roughness: 0.5,
+            metalness: 0,
+            clearcoat: 0.4,
+            clearcoatRoughness: 0.4,
+          })
+        : new MeshBasicMaterial({ color: neon });
+    materials.push(material);
+    const box = new Mesh(boxGeometry, material);
+    if (style === 'plastic') {
+      box.castShadow = true;
+      box.receiveShadow = true;
+    }
+    scene.add(box);
+    return box;
+  });
+
+  function setCarPoses(poses: CarPose[]): void {
+    poses.forEach((pose, i) => {
+      const box = carBoxes[i];
+      if (!box) return;
+      const height = BOX_GROUND_HEIGHT + (pose.elevated ? BOX_ELEVATED_LIFT : 0);
+      box.position.set(pose.x, height, -pose.y);
+      box.rotation.y = pose.yaw;
+    });
+  }
+
+  function dispose(): void {
+    for (const box of carBoxes) scene.remove(box);
+    boxGeometry.dispose();
+    for (const material of materials) material.dispose();
+  }
+
+  return { setCarPoses, dispose };
 }
 
 // Iterated as a literal-typed tuple index (not a generic `number`) so
@@ -93,26 +152,10 @@ export function createDebugView(scene: Scene, track: Track): DebugView {
     }
   }
 
-  const boxGeometry = new BoxGeometry(BOX_LENGTH, BOX_HEIGHT, BOX_WIDTH);
-  geometries.push(boxGeometry);
-  const carBoxes = LANE_COLORS.map((color) => {
-    const material = new MeshBasicMaterial({ color });
-    materials.push(material);
-    const box = new Mesh(boxGeometry, material);
-    scene.add(box);
-    added.push(box);
-    return box;
-  });
-
-  function setCarPoses(poses: CarPose[]): void {
-    poses.forEach((pose, i) => {
-      const box = carBoxes[i];
-      if (!box) return;
-      const height = BOX_GROUND_HEIGHT + (pose.elevated ? BOX_ELEVATED_LIFT : 0);
-      box.position.set(pose.x, height, -pose.y);
-      box.rotation.y = pose.yaw;
-    });
-  }
+  // The neon car boxes themselves are the shared placeholder — reuse them so
+  // the photoreal view (createCarBoxes(scene, 'plastic')) and this debug view
+  // stay in sync on geometry/posing logic.
+  const boxes = createCarBoxes(scene, 'debug');
 
   function dispose(): void {
     for (const object of added) {
@@ -124,9 +167,10 @@ export function createDebugView(scene: Scene, track: Track): DebugView {
     for (const material of materials) {
       material.dispose();
     }
+    boxes.dispose();
   }
 
-  return { setCarPoses, dispose };
+  return { setCarPoses: boxes.setCarPoses, dispose };
 }
 
 /** Samples a closed lane every ~5mm of arc length into a LineLoop-ready geometry. */

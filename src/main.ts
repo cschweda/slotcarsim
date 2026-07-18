@@ -3,10 +3,12 @@ import { TRACKS } from './config/tracks';
 import { TUNING } from './config/tuning';
 import { createInputManager } from './input/inputManager';
 import { DEFAULT_DT, createLoop } from './loop';
-import type { CarPose } from './render/debugView';
-import { createDebugView } from './render/debugView';
+import type { CarBoxes, CarPose } from './render/debugView';
+import { createCarBoxes, createDebugView } from './render/debugView';
+import { createEnvironment } from './render/environment';
 import { addLookDevContent } from './render/lookdev';
-import { createScene } from './render/scene';
+import { createScene, type Quality } from './render/scene';
+import { createTrackMesh } from './render/trackMesh';
 import { tumblePose } from './sim/car/deslot';
 import { lerp, wrapLerp } from './sim/math';
 import { buildTrack } from './sim/track/builder';
@@ -21,13 +23,16 @@ if (!container) {
   throw new Error('Missing #app container element');
 }
 
-const { scene, camera, render } = createScene(container);
+const params = new URLSearchParams(window.location.search);
+const showLookDev = params.has('lookdev');
+const showDebug = params.has('debug');
+const quality = readQuality(params.get('quality'));
 
-const showLookDev = new URLSearchParams(window.location.search).has('lookdev');
+const sceneHandle = createScene(container, { quality });
+const { scene, camera, keyLight, render } = sceneHandle;
 
-let track: ReturnType<typeof buildTrack> | undefined;
-let debugView: ReturnType<typeof createDebugView> | undefined;
 let sim: ReturnType<typeof createSim> | undefined;
+let carView: CarBoxes | undefined;
 let inputManager: ReturnType<typeof createInputManager> | undefined;
 let hud: ReturnType<typeof createHud> | undefined;
 let debugPanel: ReturnType<typeof createDebugPanel> | undefined;
@@ -38,13 +43,26 @@ let lastLapSec: number | null = null;
 let bestLapSec: number | null = null;
 
 if (showLookDev) {
-  // M0 material-reference scene — reused later when tuning M4/M5 paint,
-  // chrome, and canopy materials against known-good spheres.
+  // M0 material-reference scene — reused when tuning paint/chrome/canopy.
   addLookDevContent(scene);
+  camera.position.set(0, 1.05, 0.72);
+  camera.lookAt(0, 0, 0);
 } else {
-  addGroundPlane();
-  track = buildTrack(TRACKS.oval.refs);
-  debugView = createDebugView(scene, track);
+  const track = buildTrack(TRACKS.oval.refs);
+
+  if (showDebug) {
+    // Geometry-correctness view: flat ground + neon lane ribbons + neon boxes.
+    addGroundPlane();
+    carView = createDebugView(scene, track);
+  } else {
+    // Photoreal view: wood table + dark room + the real extruded track mesh,
+    // with the M3 car boxes reskinned as neutral dark plastic (real art in M5).
+    createEnvironment(scene, keyLight);
+    const trackMesh = createTrackMesh(track);
+    scene.add(trackMesh.group);
+    carView = createCarBoxes(scene, 'plastic');
+  }
+
   sim = createSim({
     track,
     cars: [
@@ -57,13 +75,26 @@ if (showLookDev) {
   hud = createHud(document.body);
   debugPanel = createDebugPanel(TUNING);
 
-  // M0's table rig framed the small look-dev spheres (~0.6m across); the
-  // oval's bounding box is centered around sim (0.38, 0.23) and ~1.22m wide,
-  // so re-target the same rig at that centroid and pull it back to fit.
-  // Placeholder framing either way — scene.ts's own comment already notes
-  // exact camera framing is tuned for real once M4 has real track geometry.
-  camera.position.set(0.38, 1.7, 0.95);
-  camera.lookAt(0.38, 0, -0.23);
+  applyCameraFraming();
+}
+
+/**
+ * Final "standing at the table" framing for the oval: a generous, slightly
+ * asymmetric ~57deg down-angle that fills the frame and leaves the HUD's
+ * top-left corner clear. Sim centroid is (0.381, 0.229) -> three (0.381, 0,
+ * -0.229); the camera sits off the near-right corner and looks back across.
+ */
+function applyCameraFraming(): void {
+  camera.fov = showDebug ? 45 : 38;
+  camera.near = 0.05;
+  camera.far = 20;
+  camera.position.set(1.06, 1.74, 1.02);
+  camera.lookAt(0.4, -0.02, -0.22);
+  camera.updateProjectionMatrix();
+}
+
+function readQuality(value: string | null): Quality {
+  return value === 'medium' || value === 'low' ? value : 'high';
 }
 
 function addGroundPlane(): void {
@@ -142,7 +173,7 @@ function frame(timestamp: number): void {
 
     handlePlayerLapEvents(frameEvents);
 
-    if (sim && debugView) {
+    if (sim && carView) {
       const currentSim = sim; // narrowed const so the closure below is safe
       const prevStates = currentSim.prevCarStates();
       const currStates = currentSim.carStates();
@@ -151,7 +182,7 @@ function frame(timestamp: number): void {
         const lane = currentSim.laneFor(i);
         return computeCarPose(prevState, curr, alpha, lane);
       });
-      debugView.setCarPoses(poses);
+      carView.setCarPoses(poses);
     }
 
     if (hud) {
