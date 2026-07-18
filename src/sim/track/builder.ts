@@ -8,12 +8,30 @@ import { add, dist, rot, sub, wrapAngle } from '../math';
 import { createLanePath } from './path';
 import type { LanePath, Segment } from './path';
 import { PIECES } from './pieces';
-import type { PieceRef } from './pieces';
+import type { PieceId, PieceRef } from './pieces';
+
+/**
+ * Per-piece centerline pose, in walk order — a documented builder addition so
+ * callers can reason about pieces in world space without re-deriving the walk.
+ * `center`/`heading` are the piece's CENTERLINE midpoint and tangent there
+ * (the exact center of a curve's arc, not the entry/exit chord midpoint). The
+ * figure-8 crossing test uses this to prove the two cross9 traversals share a
+ * center; the renderer uses it to dedupe the crossing square.
+ */
+export interface PieceInfo {
+  piece: PieceId;
+  kind: 'straight' | 'curve';
+  crossing: boolean;
+  center: Vec2;
+  heading: number;
+}
 
 export interface Track {
   lanes: [LanePath, LanePath];
   /** pieceBoundaries[lane] = cumulative s at each piece joint, for that lane. */
   pieceBoundaries: [number[], number[]];
+  /** Per-piece centerline pose (center + heading + crossing flag), in walk order. */
+  pieces: PieceInfo[];
 }
 
 export interface BuildTrackOptions {
@@ -38,6 +56,7 @@ interface BuildState {
   laneSegments: [Segment[], Segment[]];
   laneCumulative: [number, number];
   pieceBoundaries: [number[], number[]];
+  pieces: PieceInfo[];
 }
 
 export function buildTrack(refs: readonly PieceRef[], opts: BuildTrackOptions = {}): Track {
@@ -47,6 +66,7 @@ export function buildTrack(refs: readonly PieceRef[], opts: BuildTrackOptions = 
     laneSegments: [[], []],
     laneCumulative: [0, 0],
     pieceBoundaries: [[], []],
+    pieces: [],
   };
 
   const startPose: Pose = { pos: { x: 0, y: 0 }, heading: 0 };
@@ -59,12 +79,35 @@ export function buildTrack(refs: readonly PieceRef[], opts: BuildTrackOptions = 
       if (ref.dir !== undefined) {
         throw new Error(`Piece ${ref.piece} is a straight; dir must not be specified`);
       }
+      const entry = pose;
       pose = appendStraight(def.length, pose, state);
+      state.pieces.push({
+        piece: ref.piece,
+        kind: 'straight',
+        crossing: def.crossing === true,
+        center: midpoint(entry.pos, pose.pos),
+        heading: entry.heading,
+      });
     } else {
       if (ref.dir === undefined) {
         throw new Error(`Piece ${ref.piece} is a curve; dir ('left'|'right') is required`);
       }
+      const entry = pose;
       pose = appendCurve(def.radius, def.sweep, ref.dir, pose, state);
+      // Centerline arc midpoint: rotate the entry point about the arc center by
+      // half the signed sweep. dir/radius/sweep recompute the same center the
+      // append used (kept local to avoid threading it back out).
+      const signedSweep = ref.dir === 'left' ? def.sweep : -def.sweep;
+      const centerOffset = ref.dir === 'left' ? def.radius : -def.radius;
+      const arcCenter = add(entry.pos, rot({ x: 0, y: centerOffset }, entry.heading));
+      const mid = add(arcCenter, rot(sub(entry.pos, arcCenter), signedSweep / 2));
+      state.pieces.push({
+        piece: ref.piece,
+        kind: 'curve',
+        crossing: false,
+        center: mid,
+        heading: entry.heading + signedSweep / 2,
+      });
     }
   }
 
@@ -79,7 +122,12 @@ export function buildTrack(refs: readonly PieceRef[], opts: BuildTrackOptions = 
   return {
     lanes: [createLanePath(state.laneSegments[0]), createLanePath(state.laneSegments[1])],
     pieceBoundaries: state.pieceBoundaries,
+    pieces: state.pieces,
   };
+}
+
+function midpoint(a: Vec2, b: Vec2): Vec2 {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
 
 function appendStraight(length: number, entry: Pose, state: BuildState): Pose {
