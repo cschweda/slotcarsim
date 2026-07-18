@@ -35,21 +35,12 @@ import { createSim } from './sim/world';
 import { createDebugPanel } from './ui/debugPanel';
 import { createHud } from './ui/hud';
 import { createMenuSystem, createStartGate } from './ui/menus';
+import type { CalibrationOverlay, CountdownOverlay } from './ui/overlays';
+import { createCalibrationOverlay, createCountdownOverlay } from './ui/overlays';
 
 /** Pace/AI motor voices detune +26 cents (~+1.5%) above the player's 0. */
 const PACE_DETUNE_CENTS = 26;
 const MUTE_RAMP_TAU = 0.05;
-
-// Countdown/calibration overlay constants — declared here (ahead of the
-// createCountdownOverlay/createCalibrationOverlay CALLS below, in the
-// showLookDev/else block) rather than down by their function definitions:
-// those calls run at module-evaluation time, and a const referenced from
-// inside a hoisted function body still throws "before initialization" if
-// the const's own declaration hasn't executed yet.
-const COUNTDOWN_STYLE_ID = 'm8-countdown-style';
-/** How long "GO" stays visible once shown, regardless of how fast the race phase moves on to 'racing'. */
-const GO_HOLD_MS = 700;
-const CALIBRATION_STYLE_ID = 'm8-calibration-style';
 
 /**
  * three-space camera offset (position − lookAt) tuned by eye for the oval at
@@ -72,18 +63,19 @@ const DEFAULT_CONFIG: RaceConfig = {
   playerCar: 'p917',
 };
 
-const container = document.getElementById('app');
-if (!container) {
-  throw new Error('Missing #app container element');
-}
-
-const params = new URLSearchParams(window.location.search);
-const showLookDev = params.has('lookdev');
-const showDebug = params.has('debug');
-const quality = readQuality(params.get('quality'));
-
-const sceneHandle = createScene(container, { quality });
-const { scene, camera, keyLight, render } = sceneHandle;
+// ---- three.js scene handle + ?query flags --------------------------------
+// Populated by init() (the very bottom of this file) before any other code
+// in this module runs — see init()'s own docblock for why that ordering
+// makes a module-eval-time TDZ ReferenceError structurally impossible.
+// Declared (rather than kept as init()-local values) because
+// teardownSession/buildSession/reframeCamera/addGroundPlane/frame all need
+// them too.
+let scene!: ReturnType<typeof createScene>['scene'];
+let camera!: ReturnType<typeof createScene>['camera'];
+let keyLight!: ReturnType<typeof createScene>['keyLight'];
+let render!: ReturnType<typeof createScene>['render'];
+/** ?debug — reframeCamera and buildSession both branch on it. */
+let showDebug = false;
 
 // ---- Persistent (across races) ------------------------------------------
 let inputManager: ReturnType<typeof createInputManager> | undefined;
@@ -122,37 +114,6 @@ interface Session {
 let session: Session | undefined;
 let racingTick = 0;
 let resultsShown = false;
-
-if (showLookDev) {
-  addLookDevContent(scene);
-  camera.position.set(0, 1.05, 0.72);
-  camera.lookAt(0, 0, 0);
-} else {
-  const ovalBBox = computeTrackBBox(buildTrack(TRACKS.oval.refs));
-  refHalfExtent = { x: ovalBBox.hx, y: ovalBBox.hy };
-  if (showDebug) addGroundPlane();
-
-  inputManager = createInputManager();
-  hud = createHud(document.body);
-  debugPanel = createDebugPanel(TUNING);
-  menu = createMenuSystem(document.body);
-  countdown = createCountdownOverlay(document.body);
-  calibrationOverlay = createCalibrationOverlay(document.body);
-  qualityLadder = createQualityLadder(sceneHandle, quality);
-
-  // A static default session sits behind the gate/menu so the table isn't empty.
-  buildSession(DEFAULT_CONFIG);
-
-  // The one valid place to unlock WebAudio — then straight into the menu.
-  createStartGate(document.body, () => {
-    const newEngine = createAudioEngine();
-    newEngine.ensureRunning();
-    engine = newEngine;
-    sfx = createSfx(newEngine);
-    attachVoices(); // the default session predates audio; give it voices now
-    openMenu();
-  });
-}
 
 function otherCar(style: CarStyleId): CarStyleId {
   return style === 'p917' ? 'f512' : 'p917';
@@ -331,190 +292,14 @@ function addGroundPlane(): void {
   scene.add(ground);
 }
 
-// ---- Countdown overlay ---------------------------------------------------
-// (COUNTDOWN_STYLE_ID / GO_HOLD_MS are declared near the top of the file — see the comment there.)
-
-function ensureCountdownStyles(): void {
-  if (document.getElementById(COUNTDOWN_STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = COUNTDOWN_STYLE_ID;
-  style.textContent = `
-    .m8-countdown {
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
-      font-size: 130px;
-      font-weight: 700;
-      letter-spacing: 0.02em;
-      color: #fff4e6;
-      text-shadow: 0 0 30px rgba(255, 214, 170, 0.55), 0 4px 18px rgba(0, 0, 0, 0.7);
-      pointer-events: none;
-      user-select: none;
-    }
-    .m8-countdown--go {
-      color: #5ee06b;
-      text-shadow: 0 0 34px rgba(94, 224, 107, 0.6), 0 4px 18px rgba(0, 0, 0, 0.7);
-    }
-  `;
-  document.head.appendChild(style);
-}
-
-interface CountdownOverlay {
-  /** Per-frame update: numbers show immediately; 'GO' holds visible for GO_HOLD_MS regardless of how fast the caller moves on to null (the race phase flips to 'racing' the same instant GO fires). */
-  set(text: string | null): void;
-  /** Immediate hide, bypassing any pending GO hold — Esc-abort only. */
-  hide(): void;
-}
-function createCountdownOverlay(host: HTMLElement): CountdownOverlay {
-  ensureCountdownStyles();
-  const el = document.createElement('div');
-  el.className = 'm8-countdown';
-  host.appendChild(el);
-  let last: string | null = null;
-  let goTimer: ReturnType<typeof setTimeout> | undefined;
-
-  function show(text: string): void {
-    el.textContent = text;
-    el.classList.toggle('m8-countdown--go', text === 'GO');
-    el.style.display = 'flex';
-  }
-
-  function hide(): void {
-    clearTimeout(goTimer);
-    goTimer = undefined;
-    last = null;
-    el.style.display = 'none';
-  }
-
-  function set(text: string | null): void {
-    if (text === last) return;
-    if (text === 'GO') {
-      last = text;
-      show(text);
-      clearTimeout(goTimer);
-      goTimer = setTimeout(() => {
-        goTimer = undefined;
-        if (last === 'GO') {
-          last = null;
-          el.style.display = 'none';
-        }
-      }, GO_HOLD_MS);
-      return;
-    }
-    if (text === null) {
-      if (goTimer !== undefined) return; // a GO hold is pending — it owns the eventual clear
-      last = null;
-      el.style.display = 'none';
-      return;
-    }
-    // A genuine new number (3/2/1): cancel any stray GO timer from a
-    // previous countdown and show it immediately.
-    clearTimeout(goTimer);
-    goTimer = undefined;
-    last = text;
-    show(text);
-  }
-
-  return { set, hide };
-}
-
-// ---- Gamepad calibration overlay ------------------------------------------
-// (CALIBRATION_STYLE_ID is declared near the top of the file — see the comment there.)
-
-function ensureCalibrationStyles(): void {
-  if (document.getElementById(CALIBRATION_STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = CALIBRATION_STYLE_ID;
-  style.textContent = `
-    .m8-calibration {
-      position: fixed;
-      inset: 0;
-      z-index: 60;
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
-      text-align: center;
-      pointer-events: none;
-      user-select: none;
-      background: rgba(6, 6, 8, 0.55);
-    }
-    .m8-calibration__title {
-      font-size: 30px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      color: #ffb454;
-      text-shadow: 0 4px 18px rgba(0, 0, 0, 0.8);
-    }
-    .m8-calibration__sub {
-      font-size: 15px;
-      color: #e8e8e8;
-      opacity: 0.85;
-    }
-  `;
-  document.head.appendChild(style);
-}
-
-interface CalibrationOverlay {
-  /** Show/update the wizard while `active`; hides once `active` is false. */
-  set(active: boolean, secondsLeft: number): void;
-}
-
-function createCalibrationOverlay(host: HTMLElement): CalibrationOverlay {
-  ensureCalibrationStyles();
-
-  const el = document.createElement('div');
-  el.className = 'm8-calibration';
-  const title = document.createElement('div');
-  title.className = 'm8-calibration__title';
-  title.textContent = 'SQUEEZE AND RELEASE THE TRIGGER';
-  const sub = document.createElement('div');
-  sub.className = 'm8-calibration__sub';
-  el.append(title, sub);
-  host.appendChild(el);
-
-  let shown = false;
-
-  function set(active: boolean, secondsLeft: number): void {
-    if (active) {
-      shown = true;
-      sub.textContent = `Calibrating your gamepad… ${Math.max(0, Math.ceil(secondsLeft))}s`;
-      el.style.display = 'flex';
-    } else if (shown) {
-      shown = false;
-      el.style.display = 'none';
-    }
-  }
-
-  return { set };
-}
-
 // ---- Frame loop ----------------------------------------------------------
 
 let pendingInput: InputFrame = { throttle: 0 };
 let frameEvents: SimEvent[] = [];
 let frameBeeps: { number: number; final: boolean }[] = [];
 
-const loop = createLoop({
-  step: (dt, _tick) => {
-    if (!session) return;
-    const phase = session.race.phase();
-    if (phase === 'countdown') {
-      frameBeeps.push(...session.race.tick(dt));
-    } else if (phase === 'racing') {
-      racingTick += 1;
-      const events = session.sim.step(dt, racingTick, [pendingInput]);
-      for (const e of events) session.race.handleSimEvent(e);
-      frameEvents.push(...events);
-    }
-  },
-});
+/** Fixed-step accumulator driving sim.step(); populated by init(). */
+let loop!: ReturnType<typeof createLoop>;
 
 function handleAudioEvents(events: SimEvent[]): void {
   if (!session || !sfx) return;
@@ -719,28 +504,108 @@ function racePosition(playerLaps: number, playerS: number, aiLaps: number, aiS: 
   return playerS >= aiS ? 1 : 2;
 }
 
-requestAnimationFrame(frame);
-
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    lastTimestamp = undefined;
-    loop.reset();
+/**
+ * Module entry point. Every statement that performs a real side effect
+ * (DOM lookups, `new URLSearchParams`, `createScene`, `createLoop`, event
+ * listener registration, `requestAnimationFrame`) used to run directly at
+ * module-evaluation time, top to bottom, interleaved with this file's
+ * const/let declarations — which is exactly how this file's one
+ * ReferenceError crash happened (a value read before its own module-level
+ * declaration had executed) and was only fixable by luck-of-ordering, not
+ * structurally. Collecting every such call here, invoked once as the very
+ * last statement in the file, means every module-level const/let above is
+ * already initialized before ANY of this runs: a TDZ ReferenceError at
+ * module-eval time becomes structurally impossible rather than something the
+ * next edit could reintroduce.
+ */
+function init(): void {
+  const container = document.getElementById('app');
+  if (!container) {
+    throw new Error('Missing #app container element');
   }
-});
 
-// Esc during a race aborts back to the menu; 'M' toggles mute.
-window.addEventListener('keydown', (event) => {
-  if (event.code === 'Escape' && session) {
-    const phase = session.race.phase();
-    if (phase === 'countdown' || phase === 'racing') {
-      session.race.abort();
-      countdown?.hide();
+  const params = new URLSearchParams(window.location.search);
+  const showLookDev = params.has('lookdev');
+  showDebug = params.has('debug');
+  const quality = readQuality(params.get('quality'));
+
+  const sceneHandle = createScene(container, { quality });
+  scene = sceneHandle.scene;
+  camera = sceneHandle.camera;
+  keyLight = sceneHandle.keyLight;
+  render = sceneHandle.render;
+
+  if (showLookDev) {
+    addLookDevContent(scene);
+    camera.position.set(0, 1.05, 0.72);
+    camera.lookAt(0, 0, 0);
+  } else {
+    const ovalBBox = computeTrackBBox(buildTrack(TRACKS.oval.refs));
+    refHalfExtent = { x: ovalBBox.hx, y: ovalBBox.hy };
+    if (showDebug) addGroundPlane();
+
+    inputManager = createInputManager();
+    hud = createHud(document.body);
+    debugPanel = createDebugPanel(TUNING);
+    menu = createMenuSystem(document.body);
+    countdown = createCountdownOverlay(document.body);
+    calibrationOverlay = createCalibrationOverlay(document.body);
+    qualityLadder = createQualityLadder(sceneHandle, quality);
+
+    // A static default session sits behind the gate/menu so the table isn't empty.
+    buildSession(DEFAULT_CONFIG);
+
+    // The one valid place to unlock WebAudio — then straight into the menu.
+    createStartGate(document.body, () => {
+      const newEngine = createAudioEngine();
+      newEngine.ensureRunning();
+      engine = newEngine;
+      sfx = createSfx(newEngine);
+      attachVoices(); // the default session predates audio; give it voices now
       openMenu();
+    });
+  }
+
+  loop = createLoop({
+    step: (dt, _tick) => {
+      if (!session) return;
+      const phase = session.race.phase();
+      if (phase === 'countdown') {
+        frameBeeps.push(...session.race.tick(dt));
+      } else if (phase === 'racing') {
+        racingTick += 1;
+        const events = session.sim.step(dt, racingTick, [pendingInput]);
+        for (const e of events) session.race.handleSimEvent(e);
+        frameEvents.push(...events);
+      }
+    },
+  });
+
+  requestAnimationFrame(frame);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      lastTimestamp = undefined;
+      loop.reset();
     }
-    return;
-  }
-  if (event.code === 'KeyM' && engine) {
-    muted = !muted;
-    engine.master.gain.setTargetAtTime(muted ? 0 : MASTER_GAIN, engine.ctx.currentTime, MUTE_RAMP_TAU);
-  }
-});
+  });
+
+  // Esc during a race aborts back to the menu; 'M' toggles mute.
+  window.addEventListener('keydown', (event) => {
+    if (event.code === 'Escape' && session) {
+      const phase = session.race.phase();
+      if (phase === 'countdown' || phase === 'racing') {
+        session.race.abort();
+        countdown?.hide();
+        openMenu();
+      }
+      return;
+    }
+    if (event.code === 'KeyM' && engine) {
+      muted = !muted;
+      engine.master.gain.setTargetAtTime(muted ? 0 : MASTER_GAIN, engine.ctx.currentTime, MUTE_RAMP_TAU);
+    }
+  });
+}
+
+init();
