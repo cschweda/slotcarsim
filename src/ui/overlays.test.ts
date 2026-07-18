@@ -98,6 +98,8 @@ describe('module-eval guard: the rest of the DOM-only UI layer', () => {
 
     const gateHost = document.createElement('div');
     expect(() => createStartGate(gateHost, () => {})).not.toThrow();
-    expect(gateHost.querySelector('.m6-gate')).not.toBeNull();
+    const gate = gateHost.querySelector('.m6-gate');
+    expect(gate).not.toBeNull();
+    expect(gate!.getAttribute('role')).toBe('dialog');
   });
 });

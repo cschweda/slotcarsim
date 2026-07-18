@@ -94,6 +94,9 @@ export function createStartGate(container: HTMLElement, onStart: () => void): vo
 
   const root = document.createElement('div');
   root.className = 'm6-gate';
+  root.setAttribute('role', 'dialog');
+  root.setAttribute('aria-modal', 'true');
+  root.setAttribute('aria-label', 'AFX Slot Car Simulator — press any key to start');
 
   const title = document.createElement('div');
   title.className = 'm6-gate__title';
