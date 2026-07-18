@@ -14,7 +14,7 @@ import type { RaceConfig, RaceMachine, TrackId } from './game/race';
 import { AI_CAR_INDEX, PLAYER_CAR_INDEX, createRace, raceHasAiCar } from './game/race';
 import type { Coach } from './game/coach';
 import { createCoach } from './game/coach';
-import { rumbleOnDeslot, rumbleOnReslot } from './input/gamepad';
+import { readGamepadCameraInput, rumbleOnDeslot, rumbleOnReslot } from './input/gamepad';
 import { createInputManager } from './input/inputManager';
 import { DEFAULT_DT, createLoop } from './loop';
 import type { CarRenderPose, CarsView } from './render/carsView';
@@ -37,7 +37,6 @@ import type { LanePath } from './sim/track/path';
 import type { CarState, InputFrame, SimEvent } from './sim/types';
 import type { CarConfig, Sim } from './sim/world';
 import { createSim } from './sim/world';
-import { readGamepadCameraInput } from './input/gamepad';
 import { createCoachWidget } from './ui/coach';
 import type { CoachWidget } from './ui/coach';
 import { createDebugPanel } from './ui/debugPanel';
@@ -47,7 +46,7 @@ import type { CalibrationOverlay, CountdownOverlay, MenuButton, SoundToggle } fr
 import { createCalibrationOverlay, createCountdownOverlay, createMenuButton, createSoundToggle } from './ui/overlays';
 import { loadSoundPref, saveSoundPref } from './ui/soundPref';
 import { createStatsBar } from './ui/statsBar';
-import type { StatsBar } from './ui/statsBar';
+import type { StatsBar, StatsBarMeasurement } from './ui/statsBar';
 
 /** Pace/AI motor voices detune +26 cents (~+1.5%) above the player's 0. */
 const PACE_DETUNE_CENTS = 26;
@@ -265,6 +264,11 @@ function buildSession(config: RaceConfig): void {
   const race = createRace(config);
   const coach = config.coach ? createCoach(track.lanes[config.playerLane], TUNING) : undefined;
   coachWidget?.setVisible(config.coach);
+  // Fix round 1: COACH's own presence (hence the stats bar's left-neighbor
+  // width) varies by mode/session — re-measure now that setVisible() above
+  // has taken effect, rather than trusting whatever layout was true before
+  // this rebuild.
+  statsBar?.reposition();
 
   const motorVoices = engine
     ? styles.map((_style, i) =>
@@ -501,6 +505,31 @@ function handlePointerMove(event: PointerEvent): void {
   lastPointerX = event.clientX;
   lastPointerY = event.clientY;
   panTarget = stepPan(panTarget, dx, dy, visibleWorldWidthAtCurrentZoom(), canvasHost.clientWidth, panBounds);
+}
+
+/**
+ * Fix round 1 (post-M11a review): the stats bar's own left/right reserve is
+ * now measured from the REAL current layout instead of hand-tuned constants
+ * — see statsBar.ts's `computeStatsBarBounds` for the derivation. This is
+ * the one function that knows WHICH real elements count as "the left-stack
+ * neighbor" (COACH's own edge when the session has it on, else HUD's — via
+ * Math.max, so a hidden COACH's zero rect naturally loses) and "the
+ * SOUND/MENU button column" (SOUND's own element, since it — unlike MENU —
+ * is always visible once created, so it's a reliable thing to measure even
+ * outside a live session). Passed to createStatsBar once; invoked by the
+ * bar itself on mount, and by this file on window resize and on every
+ * session rebuild (see those call sites).
+ */
+function measureStatsBarBounds(): StatsBarMeasurement {
+  const hostRect = canvasHost.getBoundingClientRect();
+  const hudRight = hud?.root.getBoundingClientRect().right ?? 0;
+  const coachRight = coachWidget?.root.getBoundingClientRect().right ?? 0;
+  return {
+    hostLeft: hostRect.left,
+    hostRight: hostRect.right,
+    leftNeighborRight: Math.max(hudRight, coachRight),
+    rightNeighborLeft: soundToggle?.root.getBoundingClientRect().left ?? 0,
+  };
 }
 
 /** Tallies deslot sim events into the stats bar's session counters — the player's own and (if this session has a second car) the AI's. */
@@ -895,13 +924,27 @@ function init(): void {
 
     inputManager = createInputManager();
     hud = createHud(canvasHost);
-    statsBar = createStatsBar(canvasHost);
+    // measureStatsBarBounds reads hud/coachWidget/soundToggle by closing over
+    // their module-level `let` bindings, so it's safe to pass here even
+    // though coachWidget/soundToggle are both still undefined at this exact
+    // line (createStatsBar's own mount-time reposition() call just measures
+    // them as "not present yet", which is literally true right now, and
+    // gets corrected by the buildSession()/resize reposition() calls below
+    // once they exist).
+    statsBar = createStatsBar(canvasHost, measureStatsBarBounds);
     coachWidget = createCoachWidget(canvasHost);
     debugPanel = createDebugPanel(container, canvasHost, TUNING);
     menu = createMenuSystem(canvasHost);
     countdown = createCountdownOverlay(canvasHost);
     calibrationOverlay = createCalibrationOverlay(canvasHost);
     qualityLadder = createQualityLadder(sceneHandle, quality);
+
+    // Fix round 1: the stats bar's left/right reserve depends on the real
+    // layout of its neighbors, which a browser window resize can change
+    // (independent of any session rebuild) — re-measure whenever that
+    // happens. Scoped to this branch (like the rest of the overlay wiring)
+    // since statsBar only exists here, never in ?lookdev mode.
+    window.addEventListener('resize', () => statsBar?.reposition());
 
     // Mouse-wheel/trackpad-pinch zoom (render/cameraZoom.ts). Listens on
     // canvasHost SPECIFICALLY (never window/document) — canvasHost and the

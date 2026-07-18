@@ -190,6 +190,8 @@ export interface SoundToggle {
    * can never disagree about the current state.
    */
   set(on: boolean): void;
+  /** The button's own root DOM node — exposed so main.ts can measure its real layout (getBoundingClientRect) for the stats bar's dynamic left/right positioning (see ui/statsBar.ts's computeStatsBarBounds). Used in preference to the MENU button as "the SOUND/MENU column"'s reference point since this one is always visible once created, unlike MENU (hidden outside a live session). */
+  root: HTMLElement;
 }
 
 /**
@@ -220,7 +222,7 @@ export function createSoundToggle(
   render(options.initialOn);
   button.addEventListener('click', options.onToggle);
 
-  return { set: render };
+  return { set: render, root: button };
 }
 
 // ---- Menu button -----------------------------------------------------------

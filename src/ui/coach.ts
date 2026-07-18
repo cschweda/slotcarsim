@@ -20,6 +20,8 @@ export interface CoachWidget {
   setVisible(visible: boolean): void;
   /** Per-frame update from game/coach.ts's Coach.advise() output. */
   update(advice: { zone: CoachZone; headroom: number }): void;
+  /** The widget's own root DOM node — exposed so main.ts can measure its real layout (getBoundingClientRect) for the stats bar's dynamic left/right positioning (see ui/statsBar.ts's computeStatsBarBounds). Reads as the zero rect while hidden, which is exactly the "not present" signal that positioning math wants. */
+  root: HTMLElement;
 }
 
 function ensureStyles(): void {
@@ -135,5 +137,5 @@ export function createCoachWidget(container: HTMLElement): CoachWidget {
     gaugeFill.style.background = meta.color;
   }
 
-  return { setVisible, update };
+  return { setVisible, update, root };
 }

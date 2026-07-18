@@ -36,6 +36,8 @@ export interface Hud {
   update(state: HudUpdate): void;
   /** M10: briefly flash a short message (e.g. a stickiness level name) near the lap counter, fading out over ~1.5s. Re-triggerable — a new call while one is still fading restarts the animation. */
   flashMessage(text: string): void;
+  /** The HUD's own root DOM node — exposed so main.ts can measure its real layout (getBoundingClientRect) for the stats bar's dynamic left/right positioning (see ui/statsBar.ts's computeStatsBarBounds). */
+  root: HTMLElement;
 }
 
 function ensureStyles(): void {
@@ -251,5 +253,5 @@ export function createHud(container: HTMLElement): Hud {
     flashEl.classList.add('m2-hud__flash--show');
   }
 
-  return { update, flashMessage };
+  return { update, flashMessage, root };
 }
