@@ -19,7 +19,8 @@ import { createInputManager } from './input/inputManager';
 import { DEFAULT_DT, createLoop } from './loop';
 import type { CarRenderPose, CarsView } from './render/carsView';
 import { createCarsView } from './render/carsView';
-import { ZOOM_DEFAULT, approachZoom, stepZoom } from './render/cameraZoom';
+import { ZOOM_DEFAULT, approachZoom, stepZoom, stepZoomFromStick } from './render/cameraZoom';
+import { panBoundsFromBBox, stepPan, stepPanFromStick, type PanBounds } from './render/cameraPan';
 import type { CarPose, DebugView } from './render/debugView';
 import { createDebugView } from './render/debugView';
 import type { Environment } from './render/environment';
@@ -36,6 +37,7 @@ import type { LanePath } from './sim/track/path';
 import type { CarState, InputFrame, SimEvent } from './sim/types';
 import type { CarConfig, Sim } from './sim/world';
 import { createSim } from './sim/world';
+import { readGamepadCameraInput } from './input/gamepad';
 import { createCoachWidget } from './ui/coach';
 import type { CoachWidget } from './ui/coach';
 import { createDebugPanel } from './ui/debugPanel';
@@ -44,6 +46,8 @@ import { createMenuSystem, createStartGate } from './ui/menus';
 import type { CalibrationOverlay, CountdownOverlay, MenuButton, SoundToggle } from './ui/overlays';
 import { createCalibrationOverlay, createCountdownOverlay, createMenuButton, createSoundToggle } from './ui/overlays';
 import { loadSoundPref, saveSoundPref } from './ui/soundPref';
+import { createStatsBar } from './ui/statsBar';
+import type { StatsBar } from './ui/statsBar';
 
 /** Pace/AI motor voices detune +26 cents (~+1.5%) above the player's 0. */
 const PACE_DETUNE_CENTS = 26;
@@ -84,6 +88,18 @@ let scene!: ReturnType<typeof createScene>['scene'];
 let camera!: ReturnType<typeof createScene>['camera'];
 let keyLight!: ReturnType<typeof createScene>['keyLight'];
 let render!: ReturnType<typeof createScene>['render'];
+/** The renderer's own canvas element — used only to gate click-drag panning to a pointerdown that actually landed on the canvas itself (never a DOM button/menu overlay also living inside canvasHost). */
+let renderer!: ReturnType<typeof createScene>['renderer'];
+/**
+ * The flex:1 child both the renderer and every DOM overlay (HUD, sound/menu
+ * buttons, the stats bar, menus, countdown/calibration) mount into — see
+ * init()'s own docblock for the full layout rationale. Module-level (not an
+ * init()-local const, unlike M9) because the click-drag pan wiring and the
+ * per-frame visibleWorldWidthAtCurrentZoom() helper below both need it, and
+ * the latter is called from frame(), a sibling top-level function, not a
+ * nested closure of init().
+ */
+let canvasHost!: HTMLElement;
 /** ?debug — reframeCamera and buildSession both branch on it. */
 let showDebug = false;
 
@@ -94,13 +110,30 @@ let showDebug = false;
  * frame without redoing the bbox/scale math — see applyCameraFraming().
  */
 interface CameraFraming {
-  lookAt: { x: number; y: number; z: number };
   offset: { x: number; y: number; z: number };
 }
 let cameraFraming: CameraFraming | undefined;
 /** Mouse-wheel/pinch zoom (render/cameraZoom.ts): the wheel-driven goal and the smoothed live value applied to the camera each frame. Both reset to ZOOM_DEFAULT on every session/track rebuild — see reframeCamera(). */
 let zoomTarget = ZOOM_DEFAULT;
 let zoomCurrent = ZOOM_DEFAULT;
+/**
+ * Click-and-drag / gamepad-left-stick camera panning (render/cameraPan.ts):
+ * the sim-plane (x, y) point applyCameraFraming() re-centers BOTH the
+ * camera's lookAt and its position on every frame — the live, drag/stick-
+ * updated replacement for what used to be CameraFraming's own fixed
+ * `lookAt`. Reset to the current track's bbox center, and re-bounded, on
+ * every reframeCamera() (session/track rebuild) — exactly like the zoom
+ * multiplier above, so pan and zoom both reset together and independently
+ * compose the rest of the time (each is just a number folded into the same
+ * per-frame framing call).
+ */
+let panTarget = { x: 0, y: 0 };
+/** This session's pan clamp range: the current track's bbox ± cameraPan.ts's PAN_MARGIN_M. Recomputed alongside panTarget in reframeCamera(). */
+let panBounds: PanBounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+/** Active click-drag pointer, or undefined when not panning — see handlePointerDown/handlePointerMove/endPan. */
+let panPointerId: number | undefined;
+let lastPointerX = 0;
+let lastPointerY = 0;
 
 // ---- Persistent (across races) ------------------------------------------
 let inputManager: ReturnType<typeof createInputManager> | undefined;
@@ -115,8 +148,17 @@ let soundToggle: SoundToggle | undefined;
 let menuButton: MenuButton | undefined;
 /** M10: persistent throttle-coach HUD widget — created once; visible only for a session with RaceConfig.coach on (see buildSession()). */
 let coachWidget: CoachWidget | undefined;
+/** M11: persistent top-center stats bar — created once; visible only during countdown/racing (see frame()). */
+let statsBar: StatsBar | undefined;
 /** Rolling frame-time monitor that steps DPR/shadow quality down under sustained load and back up under sustained headroom (never above ?quality). */
 let qualityLadder: ReturnType<typeof createQualityLadder> | undefined;
+/** M11: this session's own deslot tallies (player / AI), fed to the stats bar — reset in buildSession(), incremented on 'deslot' sim events (handleCrashEvents). */
+let playerCrashes = 0;
+let aiCrashes = 0;
+/** M11: exponentially-smoothed render fps (independent of any session — a rendering-loop property, not sim state, so it is NOT reset on rebuild). */
+let fpsEma = 60;
+/** M11: smoothing factor for fpsEma's per-frame exponential update — small enough to stay readable, responsive enough to reflect a real quality-tier step within a second or so. */
+const FPS_SMOOTHING = 0.1;
 
 // Audio: created only inside the start gate's real user-gesture handler.
 let engine: AudioEngine | undefined;
@@ -247,6 +289,8 @@ function buildSession(config: RaceConfig): void {
   };
   racingTick = 0;
   resultsShown = false;
+  playerCrashes = 0;
+  aiCrashes = 0;
   reframeCamera(bbox);
 }
 
@@ -349,11 +393,13 @@ function computeTrackBBox(track: Track): TrackBBox {
  * Height (offset.y) scales by the larger of the two ratios, so the camera
  * pulls back enough to cover whichever axis grew the most.
  *
- * Stores the result as `cameraFraming` (lookAt + the scaled offset) rather
- * than setting `camera.position` directly — `applyCameraFraming()` does that,
- * scaled by the live mouse-wheel zoom multiplier, every frame. Also resets
- * the zoom to ZOOM_DEFAULT: a session/track rebuild is exactly the brief's
- * "reset zoom on every session/track rebuild" trigger (this is the only
+ * Stores the result as `cameraFraming` (just the scaled offset — the lookAt
+ * itself now lives in `panTarget`, below) rather than setting
+ * `camera.position` directly — `applyCameraFraming()` does that, scaled by
+ * the live mouse-wheel zoom multiplier, every frame. Also resets the zoom to
+ * ZOOM_DEFAULT and the pan target to this bbox's own center (with a freshly
+ * computed clamp range): a session/track rebuild is exactly the brief's
+ * "reset zoom/pan on every session/track rebuild" trigger (this is the only
  * place buildSession calls into camera framing).
  */
 function reframeCamera(bbox: TrackBBox): void {
@@ -365,31 +411,105 @@ function reframeCamera(bbox: TrackBBox): void {
   camera.far = 20;
   camera.updateProjectionMatrix();
   cameraFraming = {
-    lookAt: { x: bbox.cx, y: -0.02, z: -bbox.cy }, // sim (x, y) → three (x, ·, −y)
     offset: { x: CAM_OFFSET.x * scaleX, y: CAM_OFFSET.y * scaleUp, z: CAM_OFFSET.z * scaleY },
   };
   zoomTarget = ZOOM_DEFAULT;
   zoomCurrent = ZOOM_DEFAULT;
+  panTarget = { x: bbox.cx, y: bbox.cy };
+  panBounds = panBoundsFromBBox(bbox);
   applyCameraFraming();
 }
 
 /**
- * Sets `camera.position`/`lookAt` from `cameraFraming`, scaling the offset's
- * length by `zoomCurrent` (1.0 = the fitted framing reframeCamera computed;
- * smaller = zoomed in/closer, larger = zoomed out). Called once by
- * reframeCamera() and again every frame thereafter as `zoomCurrent` eases
- * toward `zoomTarget` (see frame()) — cheap (position/lookAt only, no
- * updateProjectionMatrix — zoom never changes fov/aspect/clipping).
+ * How many world meters span canvasHost's full CSS-pixel width at the
+ * CURRENT zoomed camera distance — render/cameraPan.ts's screenDeltaToWorld()
+ * / stepPanFromStick() input for a 1:1 drag feel at any zoom. Standard
+ * perspective-camera geometry: the visible height at a given distance is
+ * `2 · distance · tan(vFov/2)`; width follows from the canvas aspect. Not
+ * cached — it depends on the live `zoomCurrent`, which eases every frame
+ * independent of any drag/stick input.
+ */
+function visibleWorldWidthAtCurrentZoom(): number {
+  if (!cameraFraming) return 0;
+  const { offset } = cameraFraming;
+  const distance = Math.hypot(offset.x, offset.y, offset.z) * zoomCurrent;
+  const vFovRad = (camera.fov * Math.PI) / 180;
+  const visibleHeight = 2 * distance * Math.tan(vFovRad / 2);
+  const aspect = canvasHost.clientWidth / canvasHost.clientHeight;
+  return visibleHeight * aspect;
+}
+
+/**
+ * Sets `camera.position`/`lookAt` from `cameraFraming`'s offset and the live
+ * `panTarget` (sim (x, y) → three (x, ·, −y), the same convention
+ * reframeCamera's old fixed lookAt used), scaling the offset's length by
+ * `zoomCurrent` (1.0 = the fitted framing reframeCamera computed; smaller =
+ * zoomed in/closer, larger = zoomed out). Called once by reframeCamera() and
+ * again every frame thereafter as `zoomCurrent` eases toward `zoomTarget`
+ * and/or `panTarget` moves via drag or the gamepad stick (see frame()) —
+ * cheap (position/lookAt only, no updateProjectionMatrix — neither zoom nor
+ * pan ever changes fov/aspect/clipping).
  */
 function applyCameraFraming(): void {
   if (!cameraFraming) return;
-  const { lookAt, offset } = cameraFraming;
+  const { offset } = cameraFraming;
+  const lookAtX = panTarget.x;
+  const lookAtY = -0.02;
+  const lookAtZ = -panTarget.y;
   camera.position.set(
-    lookAt.x + offset.x * zoomCurrent,
-    lookAt.y + offset.y * zoomCurrent,
-    lookAt.z + offset.z * zoomCurrent,
+    lookAtX + offset.x * zoomCurrent,
+    lookAtY + offset.y * zoomCurrent,
+    lookAtZ + offset.z * zoomCurrent,
   );
-  camera.lookAt(lookAt.x, lookAt.y, lookAt.z);
+  camera.lookAt(lookAtX, lookAtY, lookAtZ);
+}
+
+/** Ends an active click-drag pan (pointerup/pointercancel) — releases capture and restores the grab cursor. */
+function endPan(event: PointerEvent): void {
+  if (panPointerId === undefined || event.pointerId !== panPointerId) return;
+  panPointerId = undefined;
+  if (canvasHost.hasPointerCapture(event.pointerId)) canvasHost.releasePointerCapture(event.pointerId);
+  canvasHost.style.cursor = 'grab';
+}
+
+/**
+ * Starts a click-drag pan — but ONLY when the pointerdown's own target is
+ * the renderer's canvas element itself, never any DOM overlay also living
+ * inside canvasHost (the SOUND/MENU buttons, an open setup/results menu —
+ * see init()'s docblock on why those are siblings-in-the-DOM-tree but
+ * visually "above" the canvas). The HUD/countdown/calibration overlays set
+ * `pointer-events: none`, so a drag starting over them naturally falls
+ * through to the canvas underneath and IS captured, same as everywhere else
+ * on the table. Ignores a second pointer while already panning (e.g. a
+ * second touch) and any non-primary button/contact.
+ */
+function handlePointerDown(event: PointerEvent): void {
+  if (panPointerId !== undefined) return;
+  if (event.target !== renderer.domElement || event.button !== 0) return;
+  event.preventDefault();
+  panPointerId = event.pointerId;
+  lastPointerX = event.clientX;
+  lastPointerY = event.clientY;
+  canvasHost.setPointerCapture(event.pointerId);
+  canvasHost.style.cursor = 'grabbing';
+}
+
+function handlePointerMove(event: PointerEvent): void {
+  if (panPointerId === undefined || event.pointerId !== panPointerId) return;
+  const dx = event.clientX - lastPointerX;
+  const dy = event.clientY - lastPointerY;
+  lastPointerX = event.clientX;
+  lastPointerY = event.clientY;
+  panTarget = stepPan(panTarget, dx, dy, visibleWorldWidthAtCurrentZoom(), canvasHost.clientWidth, panBounds);
+}
+
+/** Tallies deslot sim events into the stats bar's session counters — the player's own and (if this session has a second car) the AI's. */
+function handleCrashEvents(events: SimEvent[]): void {
+  for (const event of events) {
+    if (event.type !== 'deslot') continue;
+    if (event.carIndex === PLAYER_CAR_INDEX) playerCrashes += 1;
+    else aiCrashes += 1;
+  }
 }
 
 function readQuality(value: string | null): Quality {
@@ -488,6 +608,13 @@ function frame(timestamp: number): void {
     const dtFrame = (timestamp - lastTimestamp) / 1000;
     qualityLadder?.sample(dtFrame * 1000);
 
+    // M11: rolling (exponentially-smoothed) render fps for the stats bar —
+    // independent of session/race state, so it's never reset on a rebuild.
+    if (dtFrame > 0) {
+      const instantFps = 1 / dtFrame;
+      fpsEma = fpsEma + (instantFps - fpsEma) * FPS_SMOOTHING;
+    }
+
     // Ease the live zoom toward the wheel-driven target every frame,
     // independent of race phase — zoom works in the menu/countdown too, not
     // just mid-race.
@@ -495,11 +622,29 @@ function frame(timestamp: number): void {
     applyCameraFraming();
 
     const phase = session.race.phase();
+    const liveSession = phase === 'countdown' || phase === 'racing';
+
+    // M11: gamepad camera sticks — standard-mapping pads only (see
+    // input/gamepad.ts's readGamepadCameraInput), left stick pans, right
+    // stick vertical zooms. Gated to a live session only, same as the stats
+    // bar below — sticks stay quiet at the menu/results screens (which have
+    // no gamepad navigation of their own to fight anyway, but drifting the
+    // camera behind a modal that already covers the whole canvas would just
+    // be pointless). Composes with wheel zoom / click-drag pan for free —
+    // it's folded into the exact same zoomTarget/panTarget this frame's
+    // easing above already reads.
+    if (liveSession) {
+      const stick = readGamepadCameraInput();
+      if (stick) {
+        panTarget = stepPanFromStick(panTarget, stick.panX, stick.panY, dtFrame, visibleWorldWidthAtCurrentZoom(), panBounds);
+        zoomTarget = stepZoomFromStick(zoomTarget, stick.zoom, dtFrame);
+      }
+    }
 
     // M10: the on-screen MENU button is only useful (and only shown) while a
     // race is actually live — the menu/results screens already have their
     // own way back.
-    menuButton?.setVisible(phase === 'countdown' || phase === 'racing');
+    menuButton?.setVisible(liveSession);
 
     // Outside a race (menu, countdown), poll the gamepad directly (never the
     // keyboard, whose read() would otherwise ramp up its throttle while a
@@ -521,6 +666,7 @@ function frame(timestamp: number): void {
     for (const beep of frameBeeps) sfx?.countdownBeep(beep.final);
     handleAudioEvents(frameEvents);
     handleRumbleEvents(frameEvents);
+    handleCrashEvents(frameEvents);
 
     // Race finished this frame → show results once (session stays on the table).
     if (session.race.phase() === 'finished' && !resultsShown) {
@@ -618,6 +764,23 @@ function frame(timestamp: number): void {
       });
     }
 
+    // M11: top-center stats bar — speed updates every frame, counters track
+    // this session's own tallies (laps from the race machine, crashes from
+    // handleCrashEvents above), visible only during countdown/racing (any
+    // mode) same as the on-screen MENU button.
+    if (statsBar) {
+      const playerState = currStates[PLAYER_CAR_INDEX];
+      const hasAi = raceHasAiCar(session.config);
+      statsBar.update({
+        speedMs: playerState ? playerState.v : 0,
+        laps: session.race.laps(PLAYER_CAR_INDEX),
+        crashes: playerCrashes,
+        aiCrashes: hasAi ? aiCrashes : undefined,
+        fps: fpsEma,
+      });
+      statsBar.setVisible(liveSession);
+    }
+
     if (debugPanel) {
       const playerState = currStates[PLAYER_CAR_INDEX];
       if (playerState) {
@@ -694,7 +857,7 @@ function init(): void {
   // because EVERY z-indexed overlay now lives inside it, so their relative
   // stacking order (hud 10 < countdown 50 < calibration 60 < menus/gate
   // 100 < sound toggle/reopen tab 110) is preserved exactly as before.
-  const canvasHost = document.createElement('div');
+  canvasHost = document.createElement('div');
   canvasHost.id = 'canvas-host';
   Object.assign(canvasHost.style, {
     position: 'relative',
@@ -703,6 +866,8 @@ function init(): void {
     height: '100%',
     overflow: 'hidden',
     contain: 'layout',
+    cursor: 'grab', // M11: click-and-drag camera pan is available everywhere on the canvas; overlay buttons/dialogs set their own `cursor: pointer` and win the cascade over this inherited value
+    touchAction: 'none', // let pointer events (not the browser's native touch-scroll/pinch) own gestures over the canvas — same reasoning three.js's own OrbitControls uses
   });
   container.appendChild(canvasHost);
 
@@ -711,6 +876,7 @@ function init(): void {
   camera = sceneHandle.camera;
   keyLight = sceneHandle.keyLight;
   render = sceneHandle.render;
+  renderer = sceneHandle.renderer;
 
   if (showLookDev) {
     addLookDevContent(scene);
@@ -729,6 +895,7 @@ function init(): void {
 
     inputManager = createInputManager();
     hud = createHud(canvasHost);
+    statsBar = createStatsBar(canvasHost);
     coachWidget = createCoachWidget(canvasHost);
     debugPanel = createDebugPanel(container, canvasHost, TUNING);
     menu = createMenuSystem(canvasHost);
@@ -753,6 +920,18 @@ function init(): void {
       },
       { passive: false },
     );
+
+    // Click-and-drag camera pan (render/cameraPan.ts). Listens on canvasHost
+    // SPECIFICALLY, same as the wheel zoom above, but ALSO gates on the
+    // pointerdown's own target being the renderer's canvas element itself —
+    // see handlePointerDown's own doc comment for why that's what keeps a
+    // click on the SOUND/MENU buttons or an open menu from ever starting a
+    // drag. setPointerCapture means the drag keeps tracking even if the
+    // cursor leaves the canvas (or the window) before releasing.
+    canvasHost.addEventListener('pointerdown', handlePointerDown);
+    canvasHost.addEventListener('pointermove', handlePointerMove);
+    canvasHost.addEventListener('pointerup', endPan);
+    canvasHost.addEventListener('pointercancel', endPan);
 
     // A static default session sits behind the gate/menu so the table isn't empty.
     buildSession(DEFAULT_CONFIG);

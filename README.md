@@ -9,6 +9,7 @@ A photorealistic, browser-based simulation of 1970s Aurora AFX HO-scale slot car
 - Fully synthesized WebAudio motor sound (no samples), pitch-mapped to speed.
 - An AI opponent with adjustable difficulty, and a full race mode with lap timing (plus a solo Time Trial mode).
 - Gamepad (analog trigger, with an auto-calibration wizard and rumble) and keyboard input — see [Controls](#controls) below.
+- A top-center stats bar (current speed plus its HO 1:64 scale-equivalent mph, session lap and crash tallies, rolling FPS, and the fixed 120 Hz sim tick rate), shown alongside the HUD while a race/practice/time-trial session is live.
 - A photoreal rendering pipeline: ACES filmic tone mapping, image-based lighting from a room environment map, a warm key light, and an auto quality ladder that steps rendering quality down under sustained load and back up once it recovers.
 - Fixed-timestep (120 Hz) deterministic simulation core with hidden-tab-safe pause/resume.
 - A mechanically-enforced architecture rule: the simulation core (`src/sim/`, `src/config/`) is pure TypeScript, guarded by a test that fails if it ever imports Three.js, touches the DOM, or calls `Math.random`/`Date.now`.
@@ -24,7 +25,7 @@ This is a proof of concept, not a finished commercial game. See the [design doc]
 - **Gamepad** (preferred whenever one is connected): the analog trigger is throttle. The first time an unfamiliar controller is used, a 5-second calibration wizard runs automatically ("SQUEEZE AND RELEASE THE TRIGGER") to find and measure its active control; the result is remembered (`localStorage`) so it only happens once per controller. Force a re-run with `?calibrate`. Deslotting gives a strong rumble pulse and reslotting a light one, on gamepads that support it.
 - **Keyboard** (fallback, always available): `Space` or `↑` is throttle — hold to ramp up like squeezing a trigger, release to brake instantly.
 - **Sound** — off by default. A persistent `SOUND: ON`/`SOUND: OFF` button in the top-right corner (visible in every screen after the start gate) toggles it; `M` is the keyboard shortcut and always stays in sync with the button. The choice is remembered (`localStorage`) across reloads.
-- **Mouse wheel** — zoom the track view in/out (trackpad pinch works too). Resets to the fitted default on every race/track rebuild.
+- **Camera** — scroll or pinch to zoom the track view in/out (0.35×–1.15× the fitted framing); click and drag anywhere on the track to pan the view left/right/up/down (clamped to stay near the track). On a gamepad with a **standard** button/axis mapping, the left stick pans and the right stick's vertical axis zooms, during countdown/racing only — a non-standard pad has no assumed stick layout, so only its calibrated throttle control works. All three (wheel, drag, stick) compose together and reset to the fitted default view on every race/track rebuild.
 - **`Esc`** (or the on-screen **MENU** button, top-right, visible while a race is live) — abort the current race and return to the menu.
 - **`[` / `]`** — in Practice mode only, step the Stickiness grip assist down/up while driving; the HUD flashes the new level's name for a moment.
 - Menus: `↑`/`↓` choose a row, `←`/`→` change its value, `Enter` confirm/start.

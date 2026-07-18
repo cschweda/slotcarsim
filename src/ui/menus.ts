@@ -113,10 +113,11 @@ function ensureStyles(): void {
 const CONTROLS_ITEMS: ReadonlyArray<readonly [label: string, value: string]> = [
   ['THROTTLE', 'hold Space or ↑'],
   ['SOUND', 'M or the Sound button'],
+  ['CAMERA', 'wheel to zoom · drag to move the view'],
   ['STICKINESS (Practice)', '[ / ] to adjust'],
   ['MENU / ABORT', 'Esc or the MENU button'],
   ['MENUS', '↑↓ choose · ←→ change · Enter select'],
-  ['GAMEPAD', 'squeeze the right trigger (auto-detected)'],
+  ['GAMEPAD', 'trigger = throttle (auto-detected) · left stick = pan · right stick = zoom'],
 ];
 
 /**
