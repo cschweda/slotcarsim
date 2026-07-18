@@ -8,6 +8,8 @@
 // trace), the property that makes ghost replay/netcode possible later
 // without retrofitting (see the design doc).
 import type { Tuning } from '../config/tuning';
+import type { AiDriver } from './ai/driver';
+import { createAiDriver } from './ai/driver';
 import { stepCar } from './car/car';
 import { createRng } from './rng';
 import type { LapTimer } from './timing';
@@ -37,10 +39,16 @@ function initialCarState(lane: 0 | 1): CarState {
 export interface CarConfig {
   /** Which of the track's two lanes this car runs on. */
   lane: 0 | 1;
-  /** 'input': driven by an InputFrame each step. 'constant': ignores input. */
-  controlled: 'input' | 'constant';
-  /** Required when controlled === 'constant' (the M2 pace-car placeholder). */
+  /**
+   * 'input': driven by an InputFrame each step. 'constant': ignores input
+   * (the M2/attract pace-car placeholder). 'ai': driven by an AiDriver the
+   * world constructs and owns; consumes no InputFrame.
+   */
+  controlled: 'input' | 'constant' | 'ai';
+  /** Required when controlled === 'constant' (the pace-car placeholder). */
   constantV?: number;
+  /** Difficulty ∈ [0,1] for controlled === 'ai' (defaults to 0.5 if omitted). */
+  difficulty?: number;
 }
 
 export interface CreateSimOptions {
@@ -62,14 +70,26 @@ export interface Sim {
 
 export function createSim(opts: CreateSimOptions): Sim {
   const { track, cars, cfg } = opts;
-  const rng = createRng(opts.seed ?? DEFAULT_SEED);
+  const worldSeed = opts.seed ?? DEFAULT_SEED;
+  const rng = createRng(worldSeed);
 
   const lanes: LanePath[] = cars.map((car) => track.lanes[car.lane]);
   const timers: LapTimer[] = cars.map((_car, i) => createLapTimer(lanes[i]!.totalLength, i));
 
+  // Each 'ai' car gets its OWN rng, seeded worldSeed*31 + carIndex — SEPARATE
+  // from the shared world rng above. So AI throttle decisions never interleave
+  // draws into the world rng that drives tumble kinematics (M3 draw order =
+  // car order, on deslots only, stays byte-identical), while a fixed worldSeed
+  // still makes the whole race — AI included — bit-for-bit reproducible.
+  const drivers: (AiDriver | null)[] = cars.map((car, i) =>
+    car.controlled === 'ai'
+      ? createAiDriver(lanes[i]!, cfg, car.difficulty ?? 0.5, createRng(worldSeed * 31 + i))
+      : null,
+  );
+
   // Each 'input'-controlled car claims the next InputFrame slot in car
-  // order, independent of overall car index — a 'constant' pace car never
-  // consumes a slot, so it can't shift a later player's index.
+  // order, independent of overall car index — 'constant' and 'ai' cars never
+  // consume a slot, so they can't shift a later player's index.
   const inputSlotForCar: number[] = [];
   let nextSlot = 0;
   for (const car of cars) {
@@ -107,8 +127,14 @@ export function createSim(opts: CreateSimOptions): Sim {
         const sNew = (((sPrev + v * dt) % lane.totalLength) + lane.totalLength) % lane.totalLength;
         newState = { ...state, s: sNew, v };
       } else {
-        const slot = inputSlotForCar[i]!;
-        const input: InputFrame = inputs[slot] ?? { throttle: 0 };
+        // 'input' reads its InputFrame slot; 'ai' asks its own driver for a
+        // throttle (drawing only from that car's private rng). Both then run
+        // the identical stepCar physics, which may draw the WORLD rng on a
+        // deslot — so world-rng draw order stays exactly car order.
+        const input: InputFrame =
+          car.controlled === 'ai'
+            ? { throttle: drivers[i]!.throttleFor(state, dt) }
+            : (inputs[inputSlotForCar[i]!] ?? { throttle: 0 });
         const result = stepCar(state, input, lane, rng, dt, cfg, i);
         events.push(...result.events);
         newState = result.state;
