@@ -56,3 +56,18 @@ export function approachZoom(current: number, target: number, dt: number, tau: n
   const alpha = 1 - Math.exp(-Math.max(0, dt) / tau);
   return current + (target - current) * alpha;
 }
+
+/** Full-deflection right-stick zoom rate, in units of the [ZOOM_MIN, ZOOM_MAX] RANGE per second (1.2 sweeps the whole range in ~0.83s at full deflection). */
+const STICK_ZOOM_RANGE_PER_SEC = 1.2;
+
+/**
+ * Per-frame zoom-TARGET velocity from a right-stick vertical axis reading
+ * (already deadzoned — see input/gamepad.ts's readGamepadCameraInput;
+ * standard convention: negative = pushed up). Stick up zooms IN (decreases
+ * the multiplier, camera closer): `axisValue` is already negative when
+ * pushed up, so it drives the delta directly with no extra negation needed.
+ */
+export function stepZoomFromStick(current: number, axisValue: number, dt: number): number {
+  const range = ZOOM_MAX - ZOOM_MIN;
+  return clamp(current + axisValue * range * STICK_ZOOM_RANGE_PER_SEC * dt, ZOOM_MIN, ZOOM_MAX);
+}

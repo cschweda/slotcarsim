@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ZOOM_DEFAULT, ZOOM_MAX, ZOOM_MIN, approachZoom, stepZoom } from './cameraZoom';
+import { ZOOM_DEFAULT, ZOOM_MAX, ZOOM_MIN, approachZoom, stepZoom, stepZoomFromStick } from './cameraZoom';
 
 describe('stepZoom', () => {
   it('clamps at ZOOM_MAX for a large positive (zoom-out) deltaY', () => {
@@ -84,5 +84,38 @@ describe('approachZoom', () => {
 
   it('is already-there stable: approaching a target equal to current returns current unchanged', () => {
     expect(approachZoom(0.42, 0.42, 1 / 60)).toBeCloseTo(0.42, 12);
+  });
+});
+
+describe('stepZoomFromStick', () => {
+  it('a zero axis value is a no-op', () => {
+    expect(stepZoomFromStick(0.7, 0, 1 / 60)).toBeCloseTo(0.7, 12);
+  });
+
+  it('stick up (negative axis value, standard gamepad convention) zooms IN — decreases the multiplier', () => {
+    expect(stepZoomFromStick(0.7, -1, 1 / 60)).toBeLessThan(0.7);
+  });
+
+  it('stick down (positive axis value) zooms OUT — increases the multiplier', () => {
+    expect(stepZoomFromStick(0.7, 1, 1 / 60)).toBeGreaterThan(0.7);
+  });
+
+  it('full deflection sweeps the whole [ZOOM_MIN, ZOOM_MAX] range in ~1/1.2 seconds', () => {
+    let z = ZOOM_MAX;
+    const totalSec = 1 / 1.2;
+    const steps = 200;
+    const dt = totalSec / steps;
+    for (let i = 0; i < steps; i++) z = stepZoomFromStick(z, -1, dt);
+    expect(z).toBeCloseTo(ZOOM_MIN, 6);
+  });
+
+  it('never exceeds bounds regardless of how long the stick is held', () => {
+    let zIn = ZOOM_DEFAULT;
+    for (let i = 0; i < 200; i++) zIn = stepZoomFromStick(zIn, -1, 1 / 30);
+    expect(zIn).toBeGreaterThanOrEqual(ZOOM_MIN);
+
+    let zOut = ZOOM_DEFAULT;
+    for (let i = 0; i < 200; i++) zOut = stepZoomFromStick(zOut, 1, 1 / 30);
+    expect(zOut).toBeLessThanOrEqual(ZOOM_MAX);
   });
 });

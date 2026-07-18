@@ -338,3 +338,66 @@ export function rumbleOnDeslot(): void {
 export function rumbleOnReslot(): void {
   fireRumble(RESLOT_RUMBLE);
 }
+
+// =====================================================================
+// M11: camera stick input (left stick pan + right stick vertical zoom)
+// =====================================================================
+// A non-standard pad only ever has a single CALIBRATED throttle control (see
+// the wizard above) — there's no standardized axis layout to safely assume
+// left/right-stick positions from on an arbitrary/unknown pad, so
+// readGamepadCameraInput only ever reads pad.axes for mapping === 'standard'
+// (documented as a known limitation in the README). It's an independent,
+// STATELESS read (no calibration timer, no fallback discovery) — safe to
+// call once per frame alongside (not instead of) the existing throttle read.
+// Deadzoned but otherwise UNSCALED: render/cameraPan.ts and
+// render/cameraZoom.ts own the "how fast does this axis value pan/zoom the
+// camera" policy — this module only knows about clean input.
+
+const STICK_DEADZONE = 0.15;
+
+/**
+ * Radial deadzone for a 2D stick: below `deadzone` magnitude the stick reads
+ * as dead center; above it, rescaled (magnitude ramps 0→1 over
+ * [deadzone, 1] instead of jumping discontinuously at the boundary) so the
+ * first bit of post-deadzone travel starts at zero speed rather than a
+ * sudden jolt. Direction is preserved; magnitude is capped at 1 (a diagonal
+ * push can exceed 1 across two independent axes).
+ */
+export function applyRadialDeadzone(x: number, y: number, deadzone: number): { x: number; y: number } {
+  const mag = Math.hypot(x, y);
+  if (mag <= deadzone) return { x: 0, y: 0 };
+  const normalizedMag = Math.min(1, (mag - deadzone) / (1 - deadzone));
+  const scale = normalizedMag / mag;
+  return { x: x * scale, y: y * scale };
+}
+
+/** Same idea as applyRadialDeadzone, for the right stick's single (vertical-only) zoom axis. */
+export function applyAxisDeadzone(value: number, deadzone: number): number {
+  const mag = Math.abs(value);
+  if (mag <= deadzone) return 0;
+  const normalizedMag = Math.min(1, (mag - deadzone) / (1 - deadzone));
+  return Math.sign(value) * normalizedMag;
+}
+
+export interface GamepadCameraInput {
+  /** Left stick, deadzoned, standard axes[0]/[1] convention: +x = right, −y = up. */
+  panX: number;
+  panY: number;
+  /** Right stick vertical, deadzoned, standard axes[3]: negative = pushed up. */
+  zoom: number;
+}
+
+/**
+ * Left-stick pan + right-stick-vertical zoom for the first connected pad,
+ * standard mapping only — null when no standard-mapping pad is connected (a
+ * non-standard pad's stick layout can't be safely assumed, so camera stick
+ * control simply doesn't activate for one; its calibrated control keeps
+ * working as the throttle exactly as before).
+ */
+export function readGamepadCameraInput(): GamepadCameraInput | null {
+  const pad = getFirstPad();
+  if (!pad || pad.mapping !== 'standard') return null;
+  const pan = applyRadialDeadzone(pad.axes[0] ?? 0, pad.axes[1] ?? 0, STICK_DEADZONE);
+  const zoom = applyAxisDeadzone(pad.axes[3] ?? 0, STICK_DEADZONE);
+  return { panX: pan.x, panY: pan.y, zoom };
+}

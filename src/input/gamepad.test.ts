@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CALIBRATION_DURATION_SEC,
+  applyAxisDeadzone,
+  applyRadialDeadzone,
   createGamepadThrottle,
+  readGamepadCameraInput,
   rumbleOnDeslot,
   rumbleOnReslot,
 } from './gamepad';
@@ -527,5 +530,94 @@ describe('rumbleOnDeslot / rumbleOnReslot', () => {
 
     expect(() => rumbleOnDeslot()).not.toThrow();
     expect(() => rumbleOnReslot()).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// M11: camera stick input (left stick pan + right stick vertical zoom)
+// ===========================================================================
+describe('applyRadialDeadzone', () => {
+  it('reads dead center within the deadzone radius', () => {
+    expect(applyRadialDeadzone(0.1, 0.05, 0.15)).toEqual({ x: 0, y: 0 });
+  });
+
+  it('zero input is a no-op', () => {
+    expect(applyRadialDeadzone(0, 0, 0.15)).toEqual({ x: 0, y: 0 });
+  });
+
+  it('a fully-deflected single axis passes through at magnitude 1', () => {
+    const r = applyRadialDeadzone(1, 0, 0.15);
+    expect(r.x).toBeCloseTo(1, 9);
+    expect(r.y).toBeCloseTo(0, 9);
+  });
+
+  it('preserves direction while rescaling magnitude just past the deadzone edge (no jump discontinuity)', () => {
+    const dz = 0.15;
+    const halfway = dz + (1 - dz) / 2; // magnitude halfway between the deadzone edge and 1
+    const r = applyRadialDeadzone(halfway, 0, dz);
+    expect(r.x).toBeCloseTo(0.5, 9);
+    expect(r.y).toBeCloseTo(0, 9);
+  });
+
+  it('clamps a full-diagonal push (raw magnitude > 1) to unit magnitude', () => {
+    const r = applyRadialDeadzone(1, 1, 0.15);
+    expect(Math.hypot(r.x, r.y)).toBeCloseTo(1, 9);
+  });
+});
+
+describe('applyAxisDeadzone', () => {
+  it('reads 0 within the deadzone on either side', () => {
+    expect(applyAxisDeadzone(0.1, 0.15)).toBe(0);
+    expect(applyAxisDeadzone(-0.1, 0.15)).toBe(0);
+  });
+
+  it('full deflection reads exactly ±1', () => {
+    expect(applyAxisDeadzone(1, 0.15)).toBeCloseTo(1, 9);
+    expect(applyAxisDeadzone(-1, 0.15)).toBeCloseTo(-1, 9);
+  });
+
+  it('rescales just past the deadzone edge, preserving sign', () => {
+    const dz = 0.15;
+    const halfway = dz + (1 - dz) / 2;
+    expect(applyAxisDeadzone(halfway, dz)).toBeCloseTo(0.5, 9);
+    expect(applyAxisDeadzone(-halfway, dz)).toBeCloseTo(-0.5, 9);
+  });
+});
+
+describe('readGamepadCameraInput', () => {
+  it('returns null when no pad is connected', () => {
+    stubPads([]);
+    expect(readGamepadCameraInput()).toBeNull();
+  });
+
+  it('returns null for a non-standard-mapping pad — no standardized stick layout to safely assume', () => {
+    stubPads([{ id: 'nonstandard', mapping: '', buttons: [], axes: [1, 1, 0, 1] }]);
+    expect(readGamepadCameraInput()).toBeNull();
+  });
+
+  it('reads the left stick (axes 0/1) and right stick vertical (axis 3), deadzoned, for a standard pad', () => {
+    stubPads([{ id: 'std', mapping: 'standard', buttons: [], axes: [0.5, -0.5, 0, -0.8] }]);
+    const input = readGamepadCameraInput();
+    expect(input).not.toBeNull();
+    expect(input!.panX).toBeGreaterThan(0);
+    expect(input!.panY).toBeLessThan(0);
+    expect(input!.zoom).toBeLessThan(0);
+  });
+
+  it('dead-center sticks read all zero', () => {
+    stubPads([{ id: 'std', mapping: 'standard', buttons: [], axes: [0, 0, 0, 0] }]);
+    expect(readGamepadCameraInput()).toEqual({ panX: 0, panY: 0, zoom: 0 });
+  });
+
+  it('missing axes (a standard pad with a shorter axes array) read as zero rather than throwing', () => {
+    stubPads([{ id: 'short', mapping: 'standard', buttons: [], axes: [] }]);
+    expect(() => readGamepadCameraInput()).not.toThrow();
+    expect(readGamepadCameraInput()).toEqual({ panX: 0, panY: 0, zoom: 0 });
+  });
+
+  it('uses the first connected pad, same as the throttle source', () => {
+    stubPads([null, { id: 'std', mapping: 'standard', buttons: [], axes: [1, 0, 0, 0] }]);
+    const input = readGamepadCameraInput();
+    expect(input!.panX).toBeCloseTo(1, 9);
   });
 });
