@@ -1,4 +1,4 @@
-import type { Scene } from 'three';
+import { CanvasTexture, Mesh, MeshBasicMaterial, PlaneGeometry, type Scene, type Texture } from 'three';
 import type { Track } from '../sim/track/builder';
 import type { LanePath } from '../sim/track/path';
 import { WHEEL_R_FRONT, WHEEL_R_REAR, WHEELBASE, buildCarBody, type CarBody, type CarStyleId } from './carMesh';
@@ -15,6 +15,44 @@ import { WHEEL_R_FRONT, WHEEL_R_REAR, WHEELBASE, buildCarBody, type CarBody, typ
 // table); the guide pin then dips into the slot below. Kept as a local const so
 // carsView doesn't reach into trackMesh internals.
 const ROADBED_TOP = 0.006;
+
+// ---- M8: auto-quality-ladder blob shadows ---------------------------------
+// A cheap dark-radial-gradient quad under each car, tracking its ground (x,
+// z) every frame regardless of slot/tumble mode. Hidden by default; the auto
+// quality ladder (render/scene.ts) turns these on exactly when it disables
+// real shadows entirely (its rock-bottom tier), so the cars don't go from
+// grounded to floating-looking once shadows are gone.
+const BLOB_SHADOW_RADIUS = 0.05; // metres — a little larger than the ~80x32mm car body footprint
+const BLOB_SHADOW_PROUD = 0.0003; // metres above ROADBED_TOP, avoiding z-fighting with the roadbed surface
+
+let cachedBlobShadowTexture: Texture | null | undefined; // undefined = not yet attempted; null = attempted, unavailable (no document)
+
+/** Shared, lazily-built, module-cached texture — one canvas for the whole app's lifetime, reused by every car/session. */
+function getBlobShadowTexture(): Texture | null {
+  if (cachedBlobShadowTexture !== undefined) return cachedBlobShadowTexture;
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
+    cachedBlobShadowTexture = null;
+    return null;
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    cachedBlobShadowTexture = null;
+    return null;
+  }
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(0, 0, 0, 0.55)');
+  g.addColorStop(0.7, 'rgba(0, 0, 0, 0.28)');
+  g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const texture = new CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  cachedBlobShadowTexture = texture;
+  return texture;
+}
 
 /**
  * A car's per-frame render pose, computed in main.ts from sim state. `slot`
@@ -127,6 +165,8 @@ function forwardDelta(a: number, b: number, L: number): number {
 
 export interface CarsView {
   update(poses: CarRenderPose[]): void;
+  /** M8 auto quality ladder: show/hide the cheap blob-shadow fallback (its rock-bottom, shadows-off tier). */
+  setBlobShadows(enabled: boolean): void;
   dispose(): void;
 }
 
@@ -140,9 +180,27 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
   const lastS: (number | null)[] = styles.map(() => null);
   const lastGen: (number | null)[] = styles.map(() => null);
 
+  // One shared geometry + material (one shared texture) for every car's blob
+  // shadow — only the Mesh wrapper (for independent positioning) is per-car.
+  // Hidden until setBlobShadows(true).
+  const blobGeometry = new PlaneGeometry(BLOB_SHADOW_RADIUS * 2, BLOB_SHADOW_RADIUS * 2);
+  const blobMaterial = new MeshBasicMaterial({
+    map: getBlobShadowTexture(),
+    transparent: true,
+    depthWrite: false,
+  });
+  const blobShadows: Mesh[] = styles.map(() => {
+    const mesh = new Mesh(blobGeometry, blobMaterial);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.visible = false;
+    scene.add(mesh);
+    return mesh;
+  });
+
   function update(poses: CarRenderPose[]): void {
     poses.forEach((pose, i) => {
       const car = cars[i];
+      const blob = blobShadows[i];
       if (!car) return;
 
       if (pose.mode === 'tumble') {
@@ -150,6 +208,9 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
         car.group.position.set(pose.x, ROADBED_TOP + th.height, -pose.y);
         // yaw (flat spin) about world up, then pitch/roll in the car's frame.
         car.group.rotation.set(th.pitch, pose.yaw, th.roll, 'YXZ');
+        // The shadow stays grounded (ignores tumble height), tracking the
+        // car's plan-view position directly beneath it.
+        blob?.position.set(pose.x, ROADBED_TOP + BLOB_SHADOW_PROUD, -pose.y);
         lastS[i] = null; // wheels stop; drop spin tracking across the tumble
         lastGen[i] = null;
         return;
@@ -160,6 +221,7 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
       const ori = slotOrientation(lane, pose.s, pose.slideYaw);
       car.group.position.set(ori.pinX, ROADBED_TOP, ori.pinZ);
       car.group.rotation.set(0, ori.rotationY, 0, 'XYZ');
+      blob?.position.set(ori.pinX, ROADBED_TOP + BLOB_SHADOW_PROUD, ori.pinZ);
 
       // Spin the wheels by the distance actually travelled this frame, but only
       // when we're continuous with the previous frame (same generation).
@@ -174,12 +236,22 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
     });
   }
 
+  function setBlobShadows(enabled: boolean): void {
+    for (const blob of blobShadows) blob.visible = enabled;
+  }
+
   function dispose(): void {
     for (const car of cars) {
       scene.remove(car.group);
       car.dispose();
     }
+    for (const blob of blobShadows) scene.remove(blob);
+    blobGeometry.dispose();
+    blobMaterial.dispose();
+    // The shared blob-shadow texture is cached at module scope for the
+    // whole app's lifetime (reused across sessions) and is intentionally
+    // NOT disposed here.
   }
 
-  return { update, dispose };
+  return { update, setBlobShadows, dispose };
 }

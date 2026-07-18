@@ -20,7 +20,7 @@ import { createDebugView } from './render/debugView';
 import type { Environment } from './render/environment';
 import { createEnvironment } from './render/environment';
 import { addLookDevContent } from './render/lookdev';
-import { createScene, type Quality } from './render/scene';
+import { createQualityLadder, createScene, type Quality } from './render/scene';
 import type { TrackMesh } from './render/trackMesh';
 import { createTrackMesh } from './render/trackMesh';
 import { tumblePose } from './sim/car/deslot';
@@ -79,6 +79,8 @@ let hud: ReturnType<typeof createHud> | undefined;
 let debugPanel: ReturnType<typeof createDebugPanel> | undefined;
 let menu: ReturnType<typeof createMenuSystem> | undefined;
 let countdown: CountdownOverlay | undefined;
+/** Rolling frame-time monitor that steps DPR/shadow quality down under sustained load and back up under sustained headroom (never above ?quality). */
+let qualityLadder: ReturnType<typeof createQualityLadder> | undefined;
 
 // Audio: created only inside the start gate's real user-gesture handler.
 let engine: AudioEngine | undefined;
@@ -122,6 +124,7 @@ if (showLookDev) {
   debugPanel = createDebugPanel(TUNING);
   menu = createMenuSystem(document.body);
   countdown = createCountdownOverlay(document.body);
+  qualityLadder = createQualityLadder(sceneHandle, quality);
 
   // A static default session sits behind the gate/menu so the table isn't empty.
   buildSession(DEFAULT_CONFIG);
@@ -495,6 +498,7 @@ let lastTimestamp: number | undefined;
 function frame(timestamp: number): void {
   if (lastTimestamp !== undefined && session) {
     const dtFrame = (timestamp - lastTimestamp) / 1000;
+    qualityLadder?.sample(dtFrame * 1000);
     const phase = session.race.phase();
 
     pendingInput = {
@@ -525,6 +529,7 @@ function frame(timestamp: number): void {
       session.carsView.update(
         currStates.map((curr, i) => computeCarRenderPose(prevStates[i]!, curr, alpha, currentSim.laneFor(i))),
       );
+      session.carsView.setBlobShadows(qualityLadder?.blobShadowsActive() ?? false);
     } else if (session.debugView) {
       session.debugView.setCarPoses(carPoses);
     }
@@ -574,7 +579,14 @@ function frame(timestamp: number): void {
 
     if (debugPanel) {
       const playerState = currStates[PLAYER_CAR_INDEX];
-      if (playerState) debugPanel.sample({ v: playerState.v, throttle: pendingInput.throttle });
+      if (playerState) {
+        debugPanel.sample({
+          v: playerState.v,
+          throttle: pendingInput.throttle,
+          frameMs: qualityLadder?.avgFrameMs() ?? dtFrame * 1000,
+          qualityTier: qualityLadder?.tierLabel(),
+        });
+      }
     }
   }
   lastTimestamp = timestamp;

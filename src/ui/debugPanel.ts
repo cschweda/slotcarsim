@@ -9,6 +9,10 @@ import type { Tuning } from '../config/tuning';
 export interface DebugPanelSample {
   v: number;
   throttle: number;
+  /** M8: the auto quality ladder's rolling-window average frame time, ms. */
+  frameMs?: number;
+  /** M8: the auto quality ladder's current tier label (e.g. "high", "high-dpr1.5", "high-noshadow"). */
+  qualityTier?: string;
 }
 
 export interface DebugPanel {
@@ -209,6 +213,11 @@ export function createDebugPanel(tuning: Tuning): DebugPanel {
   readout.appendChild(throttleReadout);
   root.appendChild(readout);
 
+  // M8: auto quality ladder readout (rolling avg frame time + current tier).
+  const qualityReadout = document.createElement('div');
+  qualityReadout.className = 'm2-debug__readout';
+  root.appendChild(qualityReadout);
+
   const canvas = document.createElement('canvas');
   canvas.width = CHART_WIDTH;
   canvas.height = CHART_HEIGHT;
@@ -257,6 +266,11 @@ export function createDebugPanel(tuning: Tuning): DebugPanel {
     }
     vReadout.textContent = `v=${data.v.toFixed(2)} m/s`;
     throttleReadout.textContent = `throttle=${data.throttle.toFixed(2)}`;
+    if (data.frameMs !== undefined || data.qualityTier !== undefined) {
+      qualityReadout.textContent =
+        `${data.frameMs !== undefined ? `frame=${data.frameMs.toFixed(1)}ms` : ''}` +
+        `${data.qualityTier !== undefined ? ` · tier=${data.qualityTier}` : ''}`;
+    }
     draw();
   }
 

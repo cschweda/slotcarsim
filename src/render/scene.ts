@@ -28,8 +28,10 @@ interface QualityPreset {
   shadowMapSize: number;
 }
 
-// M8 will add an auto ladder that measures frame time and steps between these;
-// for now the preset is chosen once from ?quality (default high).
+// The preset chosen from ?quality (default high) seeds BOTH the initial
+// renderer setup below AND the auto quality ladder's starting tier/ceiling
+// (see createQualityLadder) — the ladder steps down from here under load and
+// never recovers back above it.
 const QUALITY_PRESETS: Record<Quality, QualityPreset> = {
   high: { maxDpr: 2, shadowMapSize: 2048 },
   medium: { maxDpr: 1.5, shadowMapSize: 1024 },
@@ -136,4 +138,161 @@ export function createScene(container: HTMLElement, options: SceneOptions = {}):
   }
 
   return { renderer, scene, camera, keyLight, render, dispose };
+}
+
+// =====================================================================
+// M8: auto quality ladder
+// =====================================================================
+// A rolling frame-time monitor that steps the renderer DOWN through DPR,
+// then shadow-map size, then shadows-off (+ carsView's cheap blob-shadow
+// fallback) under sustained load, and back UP again once things are
+// comfortably fast — never above the user's own ?quality choice. The
+// tier-stepping DECISION (buildLadderTiers/createLadderPolicy) is plain data
+// + an injected `applyTier` callback, with no three.js/DOM dependency, so it
+// is unit-testable without a real WebGLRenderer; createQualityLadder below
+// is the thin wiring onto a real SceneHandle.
+
+/** One rung of the ladder: a concrete (dpr, shadow map size, shadows on/off) tuple. */
+export interface QualityLadderTier {
+  label: string;
+  dpr: number;
+  shadowMapSize: number;
+  shadowsEnabled: boolean;
+}
+
+const LADDER_WINDOW = 120; // frames — the brief's "~120-frame window" (~2s at 60fps)
+const STEP_DOWN_AVG_MS = 20;
+const STEP_UP_AVG_MS = 12;
+const STEP_UP_SUSTAIN_SEC = 10;
+const DPR_MID = 1.5;
+const DPR_FLOOR = 1.25;
+const REDUCED_SHADOW_MAP_SIZE = 1024;
+
+/**
+ * The full step-down path from `start` (the user's ?quality tier — also the
+ * ceiling the ladder never rises back above): DPR down through 1.5 → 1.25,
+ * then shadow map size down to 1024, then shadows off entirely. Steps
+ * already satisfied by `start` are skipped — e.g. a `low` start (already
+ * dpr 1.25 / shadow 1024) only has the shadows-off step left, while `high`
+ * (dpr 2 / shadow 2048) gets the full four-step descent.
+ */
+export function buildLadderTiers(start: QualityLadderTier): QualityLadderTier[] {
+  const tiers: QualityLadderTier[] = [start];
+  for (;;) {
+    const prev = tiers[tiers.length - 1]!;
+    let next: QualityLadderTier | null = null;
+    if (prev.dpr > DPR_MID) {
+      next = { ...prev, label: `${start.label}-dpr1.5`, dpr: DPR_MID };
+    } else if (prev.dpr > DPR_FLOOR) {
+      next = { ...prev, label: `${start.label}-dpr1.25`, dpr: DPR_FLOOR };
+    } else if (prev.shadowMapSize > REDUCED_SHADOW_MAP_SIZE) {
+      next = { ...prev, label: `${start.label}-shadow1024`, shadowMapSize: REDUCED_SHADOW_MAP_SIZE };
+    } else if (prev.shadowsEnabled) {
+      next = { ...prev, label: `${start.label}-noshadow`, shadowsEnabled: false };
+    }
+    if (!next) break;
+    tiers.push(next);
+  }
+  return tiers;
+}
+
+export interface QualityLadder {
+  /** Feed one frame's duration in milliseconds; steps the tier per the hysteresis rule below. */
+  sample(frameMs: number): void;
+  tierIndex(): number;
+  tierLabel(): string;
+  /** True once shadows are fully disabled — carsView should show blob shadows instead. */
+  blobShadowsActive(): boolean;
+  /** The current rolling window's average frame time, ms (0 before the first sample) — for the debug panel's readout. */
+  avgFrameMs(): number;
+}
+
+/**
+ * Rolling `LADDER_WINDOW`-frame frame-time monitor: steps DOWN the instant a
+ * full window's average exceeds `STEP_DOWN_AVG_MS` (the full window itself
+ * IS the "sustained" signal — no separate dwell timer needed), steps UP only
+ * after `STEP_UP_SUSTAIN_SEC` straight seconds of a sub-`STEP_UP_AVG_MS`
+ * window average, and never rises above tier 0 (`cap`). Any tier change
+ * clears the window and the good-streak timer, so each decision needs its
+ * own fresh sustained read rather than acting on stale pre-change samples.
+ * `applyTier` performs the actual renderer/light mutation — injected so this
+ * decision logic stays testable without a real WebGLRenderer.
+ */
+export function createLadderPolicy(
+  cap: QualityLadderTier,
+  applyTier: (tier: QualityLadderTier) => void,
+): QualityLadder {
+  const tiers = buildLadderTiers(cap);
+  // Tier 0 (the cap) is assumed already active — the caller (createScene)
+  // sets it up directly, so applyTier is only ever invoked on a real change.
+  let index = 0;
+  let buffer: number[] = [];
+  let sum = 0;
+  let goodSeconds = 0;
+
+  function stepTo(i: number): void {
+    index = i;
+    buffer = [];
+    sum = 0;
+    goodSeconds = 0;
+    applyTier(tiers[index]!);
+  }
+
+  function sample(frameMs: number): void {
+    buffer.push(frameMs);
+    sum += frameMs;
+    if (buffer.length > LADDER_WINDOW) sum -= buffer.shift()!;
+    if (buffer.length < LADDER_WINDOW) return; // not a full window yet — nothing "sustained" to act on
+
+    const avg = sum / buffer.length;
+
+    if (avg > STEP_DOWN_AVG_MS) {
+      if (index < tiers.length - 1) stepTo(index + 1);
+      return;
+    }
+    if (avg < STEP_UP_AVG_MS) {
+      goodSeconds += frameMs / 1000;
+      if (goodSeconds >= STEP_UP_SUSTAIN_SEC && index > 0) stepTo(index - 1);
+    } else {
+      goodSeconds = 0; // between the two thresholds — neither degrading nor recovering
+    }
+  }
+
+  return {
+    sample,
+    tierIndex: () => index,
+    tierLabel: () => tiers[index]!.label,
+    blobShadowsActive: () => !tiers[index]!.shadowsEnabled,
+    avgFrameMs: () => (buffer.length > 0 ? sum / buffer.length : 0),
+  };
+}
+
+/**
+ * Wires createLadderPolicy onto a real SceneHandle: each tier change sets the
+ * renderer's pixel ratio (still capped by the display's own devicePixelRatio,
+ * matching createScene's own initial setup) and the key light's shadow map
+ * size, forcing the shadow map render target to regenerate — three.js only
+ * allocates it lazily and won't resize an existing one just because
+ * `.mapSize` changed — then toggles shadows globally via
+ * `renderer.shadowMap.enabled` (cheap: short-circuits all shadow-map
+ * generation regardless of per-object castShadow/receiveShadow flags).
+ */
+export function createQualityLadder(handle: SceneHandle, cap: Quality): QualityLadder {
+  const preset = QUALITY_PRESETS[cap];
+  const startTier: QualityLadderTier = {
+    label: cap,
+    dpr: preset.maxDpr,
+    shadowMapSize: preset.shadowMapSize,
+    shadowsEnabled: true,
+  };
+
+  function applyTier(tier: QualityLadderTier): void {
+    handle.renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.dpr));
+    handle.keyLight.shadow.mapSize.set(tier.shadowMapSize, tier.shadowMapSize);
+    handle.keyLight.shadow.map?.dispose();
+    handle.keyLight.shadow.map = null;
+    handle.renderer.shadowMap.enabled = tier.shadowsEnabled;
+  }
+
+  return createLadderPolicy(startTier, applyTier);
 }
