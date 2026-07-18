@@ -27,13 +27,13 @@ export function computeCarPose(prevState: CarState, currState: CarState, alpha: 
     return { x: pose.pos.x, y: pose.pos.y, yaw: pose.yaw, elevated: true };
   }
   if (prevState.generation !== currState.generation) {
-    const { pos, heading } = lane.pointAt(currState.s);
-    return { x: pos.x, y: pos.y, yaw: heading + currState.slideYaw };
+    const { pos, heading, z } = lane.pointAt(currState.s);
+    return { x: pos.x, y: pos.y, yaw: heading + currState.slideYaw, z: z ?? 0 };
   }
   const s = wrapLerp(prevState.s, currState.s, alpha, lane.totalLength);
   const slideYaw = lerp(prevState.slideYaw, currState.slideYaw, alpha);
-  const { pos, heading } = lane.pointAt(s);
-  return { x: pos.x, y: pos.y, yaw: heading + slideYaw };
+  const { pos, heading, z } = lane.pointAt(s);
+  return { x: pos.x, y: pos.y, yaw: heading + slideYaw, z: z ?? 0 };
 }
 
 /** Full render pose (render/carsView.ts's CarRenderPose) — the pin-guided slot orientation or the tumble theatrics' inputs. */
@@ -57,6 +57,9 @@ export function computeCarRenderPose(
       yawRate: currState.tumble!.yawRate,
       progress: pose.progress,
       phase: currState.phase,
+      // M12: the elevation the car flew off from (0 on flat tracks) — carsView
+      // decays it to the table over the first 40% of the tumble.
+      exitZ: lane.pointAt(currState.tumble!.exitS).z ?? 0,
     };
   }
   if (prevState.generation !== currState.generation) {

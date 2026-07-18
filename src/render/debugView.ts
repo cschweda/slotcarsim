@@ -48,6 +48,8 @@ export interface CarPose {
   x: number;
   y: number;
   yaw: number;
+  /** M12: centerline elevation above the table, meters — raises the debug box by z (0 on flat tracks). */
+  z?: number;
   /** True while tumbling/waiting off-slot: lifts the box and signals it's not tracking the lane. */
   elevated?: boolean;
 }
@@ -100,7 +102,7 @@ export function createCarBoxes(scene: Scene, style: CarBoxStyle = 'debug'): CarB
     poses.forEach((pose, i) => {
       const box = carBoxes[i];
       if (!box) return;
-      const height = BOX_GROUND_HEIGHT + (pose.elevated ? BOX_ELEVATED_LIFT : 0);
+      const height = BOX_GROUND_HEIGHT + (pose.z ?? 0) + (pose.elevated ? BOX_ELEVATED_LIFT : 0);
       box.position.set(pose.x, height, -pose.y);
       box.rotation.y = pose.yaw;
     });
@@ -127,7 +129,10 @@ export function createDebugView(scene: Scene, track: Track): DebugView {
 
   for (const laneIndex of LANE_INDICES) {
     const lane = track.lanes[laneIndex];
-    const geometry = buildRibbonGeometry(lane.totalLength, (s) => lane.pointAt(s).pos);
+    const geometry = buildRibbonGeometry(lane.totalLength, (s) => {
+      const p = lane.pointAt(s);
+      return { x: p.pos.x, y: p.pos.y, z: p.z ?? 0 };
+    });
     const material = new LineBasicMaterial({ color: LANE_COLORS[laneIndex] });
     const ribbon = new LineLoop(geometry, material);
     scene.add(ribbon);
@@ -144,9 +149,9 @@ export function createDebugView(scene: Scene, track: Track): DebugView {
   for (const laneIndex of LANE_INDICES) {
     const lane = track.lanes[laneIndex];
     for (const s of track.pieceBoundaries[laneIndex]) {
-      const { pos } = lane.pointAt(s);
+      const { pos, z } = lane.pointAt(s);
       const marker = new Mesh(markerGeometry, markerMaterial);
-      marker.position.set(pos.x, MARKER_HEIGHT, -pos.y);
+      marker.position.set(pos.x, MARKER_HEIGHT + (z ?? 0), -pos.y);
       scene.add(marker);
       added.push(marker);
     }
@@ -176,7 +181,7 @@ export function createDebugView(scene: Scene, track: Track): DebugView {
 /** Samples a closed lane every ~5mm of arc length into a LineLoop-ready geometry. */
 function buildRibbonGeometry(
   totalLength: number,
-  posAt: (s: number) => { x: number; y: number },
+  posAt: (s: number) => { x: number; y: number; z: number },
 ): BufferGeometry {
   const sampleCount = Math.max(3, Math.ceil(totalLength / SAMPLE_SPACING));
   const positions = new Float32Array(sampleCount * 3);
@@ -185,7 +190,7 @@ function buildRibbonGeometry(
     const s = (totalLength * i) / sampleCount;
     const pos = posAt(s);
     positions[i * 3] = pos.x;
-    positions[i * 3 + 1] = RIBBON_HEIGHT;
+    positions[i * 3 + 1] = RIBBON_HEIGHT + pos.z; // M12: honest elevation in the dev view
     positions[i * 3 + 2] = -pos.y;
   }
 

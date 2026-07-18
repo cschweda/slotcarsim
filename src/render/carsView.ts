@@ -1,4 +1,5 @@
 import { CanvasTexture, Mesh, MeshBasicMaterial, PlaneGeometry, type Scene, type Texture } from 'three';
+import { TUNING } from '../config/tuning';
 import type { Track } from '../sim/track/builder';
 import type { LanePath } from '../sim/track/path';
 import { WHEEL_R_FRONT, WHEEL_R_REAR, WHEELBASE, buildCarBody, type CarBody, type CarStyleId } from './carMesh';
@@ -73,7 +74,14 @@ export type CarRenderPose =
       yawRate: number;
       progress: number;
       phase: 'tumbling' | 'waiting';
+      // M12: the lane elevation the car flew off from — the render height decays
+      // this to table level over the first 40% of the tumble (theatrics only;
+      // the sim's plan-view tumble kinematics are unchanged). 0 on flat tracks.
+      exitZ: number;
     };
+
+/** How far into the tumble the exit-elevation fall completes (then the normal bounce curve applies at table level). */
+const TUMBLE_FALL_END = 0.4;
 
 // =====================================================================
 // Pure helpers (unit-tested in carsView.test.ts)
@@ -205,10 +213,14 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
 
       if (pose.mode === 'tumble') {
         const th = tumbleTheatrics(pose.progress, pose.phase, pose.yawRate);
-        car.group.position.set(pose.x, ROADBED_TOP + th.height, -pose.y);
+        // M12: a car that flew off an elevated section starts at that height and
+        // falls to the table over the first 40% of the tumble, then the ordinary
+        // bounce curve takes over at table level. exitZ 0 ⇒ pre-M12 behavior.
+        const fallZ = pose.exitZ * Math.max(0, 1 - pose.progress / TUMBLE_FALL_END);
+        car.group.position.set(pose.x, ROADBED_TOP + th.height + fallZ, -pose.y);
         // yaw (flat spin) about world up, then pitch/roll in the car's frame.
         car.group.rotation.set(th.pitch, pose.yaw, th.roll, 'YXZ');
-        // The shadow stays grounded (ignores tumble height), tracking the
+        // The shadow stays grounded (ignores tumble/fall height), tracking the
         // car's plan-view position directly beneath it.
         blob?.position.set(pose.x, ROADBED_TOP + BLOB_SHADOW_PROUD, -pose.y);
         lastS[i] = null; // wheels stop; drop spin tracking across the tumble
@@ -219,9 +231,21 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
       const lane: LanePath | undefined = track.lanes[pose.lane];
       if (!lane) return;
       const ori = slotOrientation(lane, pose.s, pose.slideYaw);
-      car.group.position.set(ori.pinX, ROADBED_TOP, ori.pinZ);
-      car.group.rotation.set(0, ori.rotationY, 0, 'XYZ');
-      blob?.position.set(ori.pinX, ROADBED_TOP + BLOB_SHADOW_PROUD, ori.pinZ);
+      // M12: lift the plan-view pose into 3D — centerline elevation z, a body
+      // roll into the bank, and a grade pitch. On a flat, unbanked lane every
+      // term is 0 and this is exactly the pre-M12 pose (ROADBED_TOP, yaw only).
+      const pt = lane.pointAt(pose.s);
+      const bankRoll = -Math.sign(pt.curvature) * (pt.bank ?? 0);
+      const gradePitch = -Math.atan(pt.grade ?? 0);
+      const laneOffset = pose.lane === 0 ? TUNING.laneOffset : -TUNING.laneOffset;
+      // The car rides the banked roadbed at its own lane offset: roll the point
+      // (laneOffset, ROADBED_TOP) about the centerline and add the elevation z —
+      // the identical transform trackMesh's worldPoint uses, so wheels sit on the
+      // surface rather than floating above / sinking into a banked roadbed.
+      const baseY = (pt.z ?? 0) + laneOffset * Math.sin(bankRoll) + ROADBED_TOP * Math.cos(bankRoll);
+      car.group.position.set(ori.pinX, baseY, ori.pinZ);
+      car.group.rotation.set(gradePitch, ori.rotationY, bankRoll, 'YXZ');
+      blob?.position.set(ori.pinX, baseY + BLOB_SHADOW_PROUD, ori.pinZ);
 
       // Spin the wheels by the distance actually travelled this frame, but only
       // when we're continuous with the previous frame (same generation).
