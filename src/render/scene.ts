@@ -19,10 +19,33 @@ const KEY_LIGHT_COLOR = '#ffd9a0';
 const FILL_SKY_COLOR = '#8ba8c9';
 const FILL_GROUND_COLOR = '#4a3524';
 
+export type Quality = 'high' | 'medium' | 'low';
+
+interface QualityPreset {
+  /** Device-pixel-ratio ceiling. */
+  maxDpr: number;
+  /** Key-light shadow map resolution. */
+  shadowMapSize: number;
+}
+
+// M8 will add an auto ladder that measures frame time and steps between these;
+// for now the preset is chosen once from ?quality (default high).
+const QUALITY_PRESETS: Record<Quality, QualityPreset> = {
+  high: { maxDpr: 2, shadowMapSize: 2048 },
+  medium: { maxDpr: 1.5, shadowMapSize: 1024 },
+  low: { maxDpr: 1.25, shadowMapSize: 1024 },
+};
+
+export interface SceneOptions {
+  quality?: Quality;
+}
+
 export interface SceneHandle {
   renderer: WebGLRenderer;
   scene: Scene;
   camera: PerspectiveCamera;
+  /** The warm key spot; environment.ts re-aims it over the table. */
+  keyLight: SpotLight;
   render(): void;
   dispose(): void;
 }
@@ -30,10 +53,12 @@ export interface SceneHandle {
 /**
  * Sets up the photoreal rendering pipeline: ACES tone mapping, an
  * environment-lit PBR scene, a warm shadow-casting key light, and a
- * "standing at the table" camera rig. Exact camera framing is a placeholder,
- * tuned for real in M4.
+ * "standing at the table" camera rig. Quality presets scale DPR + shadow map
+ * size; the key light's placement over the table is done in environment.ts.
  */
-export function createScene(container: HTMLElement): SceneHandle {
+export function createScene(container: HTMLElement, options: SceneOptions = {}): SceneHandle {
+  const preset = QUALITY_PRESETS[options.quality ?? 'high'];
+
   const renderer = new WebGLRenderer({ antialias: true });
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = ACESFilmicToneMapping;
@@ -44,7 +69,7 @@ export function createScene(container: HTMLElement): SceneHandle {
   // (identical rendered output). Using PCFShadowMap directly avoids the
   // dead API and the warning.
   renderer.shadowMap.type = PCFShadowMap;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, preset.maxDpr));
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.appendChild(renderer.domElement);
 
@@ -78,7 +103,7 @@ export function createScene(container: HTMLElement): SceneHandle {
   const keyLight = new SpotLight(KEY_LIGHT_COLOR, 20, 0, 0.6, 0.5, 2);
   keyLight.position.set(0.6, 1.6, 0.4);
   keyLight.castShadow = true;
-  keyLight.shadow.mapSize.set(2048, 2048);
+  keyLight.shadow.mapSize.set(preset.shadowMapSize, preset.shadowMapSize);
   keyLight.shadow.camera.near = 0.5;
   keyLight.shadow.camera.far = 4;
   scene.add(keyLight);
@@ -110,5 +135,5 @@ export function createScene(container: HTMLElement): SceneHandle {
     container.removeChild(renderer.domElement);
   }
 
-  return { renderer, scene, camera, render, dispose };
+  return { renderer, scene, camera, keyLight, render, dispose };
 }
