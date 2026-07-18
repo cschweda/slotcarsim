@@ -242,7 +242,7 @@ function showResults(): void {
   const results = session.race.results();
   if (!results) return;
   const config = session.config;
-  menu.openResults(results, config, {
+  menu.openResults(results, {
     onRestart: () => startRace(config),
     onMenu: () => openMenu(),
   });

@@ -167,9 +167,7 @@ export interface MenuSystem {
   /** Show the race-setup menu; onStart fires with the chosen config on "Start Race". */
   openSetup(onStart: (config: RaceConfig) => void): void;
   /** Show the results screen after a race. */
-  openResults(results: RaceResults, config: RaceConfig, handlers: ResultHandlers): void;
-  /** Hide whatever panel is showing (e.g. when a race begins). */
-  close(): void;
+  openResults(results: RaceResults, handlers: ResultHandlers): void;
 }
 
 export interface ResultHandlers {
@@ -218,6 +216,8 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
 
     const list = document.createElement('div');
     list.className = 'm7-menu__panel';
+    list.setAttribute('role', 'listbox');
+    list.setAttribute('aria-label', 'Race setup options');
     panel.appendChild(list);
 
     const hint = document.createElement('div');
@@ -292,7 +292,11 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
       list.replaceChildren();
       rows.forEach((row, i) => {
         const el = document.createElement('div');
+        const rowId = `m7-setup-row-${i}`;
+        el.id = rowId;
         el.className = `m7-row m7-row--${row.type}${i === selected ? ' m7-row--selected' : ''}`;
+        el.setAttribute('role', 'option');
+        el.setAttribute('aria-selected', i === selected ? 'true' : 'false');
         if (row.type === 'option') {
           const label = document.createElement('span');
           label.className = 'm7-row__label';
@@ -314,6 +318,7 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
           });
         }
         list.appendChild(el);
+        if (i === selected) list.setAttribute('aria-activedescendant', rowId);
       });
     }
 
@@ -328,6 +333,11 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
       else if (e.key === 'Enter' || e.key === ' ') {
         if (row?.type === 'action') return void row.activate();
         if (row?.type === 'option') row.cycle(1);
+      } else if (e.key === 'Tab') {
+        // Trap focus: this dialog (aria-modal) is the only focusable element
+        // on the page while it's open, so Tab must not hand focus off to
+        // browser chrome or reset it to the document.
+        root!.focus();
       } else handled = false;
       if (handled) {
         e.preventDefault();
@@ -340,15 +350,17 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
     root!.focus();
   }
 
-  function openResults(results: RaceResults, config: RaceConfig, handlers: ResultHandlers): void {
+  function openResults(results: RaceResults, handlers: ResultHandlers): void {
     teardown();
     const panel = mountPanel('Race results');
 
+    // openResults is only ever reached via a 'finished' race phase, which
+    // (per game/race.ts) only a real race (not time trial, which has no win
+    // condition) can produce — so this is always a win/lose result.
     const playerWon = results.winnerCarIndex === 0;
     const banner = document.createElement('div');
     banner.className = `m7-banner ${playerWon ? 'm7-banner--win' : 'm7-banner--lose'}`;
-    banner.textContent =
-      config.mode === 'timetrial' ? 'TIME TRIAL' : playerWon ? 'YOU WIN' : 'AI WINS';
+    banner.textContent = playerWon ? 'YOU WIN' : 'AI WINS';
     panel.appendChild(banner);
 
     const stats = document.createElement('div');
@@ -368,6 +380,8 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
 
     const buttons = document.createElement('div');
     buttons.className = 'm7-menu__panel';
+    buttons.setAttribute('role', 'listbox');
+    buttons.setAttribute('aria-label', 'Race results actions');
     const actions: ActionRow[] = [
       { type: 'action', label: 'RESTART', activate: () => (teardown(), handlers.onRestart()) },
       { type: 'action', label: 'MENU', activate: () => (teardown(), handlers.onMenu()) },
@@ -378,13 +392,18 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
       buttons.replaceChildren();
       actions.forEach((a, i) => {
         const el = document.createElement('div');
+        const rowId = `m7-results-row-${i}`;
+        el.id = rowId;
         el.className = `m7-row m7-row--action${i === selected ? ' m7-row--selected' : ''}`;
+        el.setAttribute('role', 'option');
+        el.setAttribute('aria-selected', i === selected ? 'true' : 'false');
         el.textContent = a.label;
         el.addEventListener('click', () => {
           selected = i;
           a.activate();
         });
         buttons.appendChild(el);
+        if (i === selected) buttons.setAttribute('aria-activedescendant', rowId);
       });
     }
     panel.appendChild(buttons);
@@ -398,7 +417,11 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
       let handled = true;
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') selected = wrap(selected + 1, actions.length);
       else if (e.key === 'Enter' || e.key === ' ') return void actions[selected]!.activate();
-      else handled = false;
+      else if (e.key === 'Tab') {
+        // Trap focus: this dialog (aria-modal) is the only focusable element
+        // on the page while it's open.
+        root!.focus();
+      } else handled = false;
       if (handled) {
         e.preventDefault();
         e.stopPropagation();
@@ -422,7 +445,7 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
     return root;
   }
 
-  return { openSetup, openResults, close: teardown };
+  return { openSetup, openResults };
 }
 
 function wrap(i: number, n: number): number {
