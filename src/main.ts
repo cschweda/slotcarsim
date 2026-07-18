@@ -35,14 +35,20 @@ import { createDebugPanel } from './ui/debugPanel';
 import { createHud } from './ui/hud';
 import { createMenuSystem, createStartGate } from './ui/menus';
 
-const TABLE_CENTER_X = 0.381;
-const TABLE_HALF_WIDTH = 0.85; // TABLE_WIDTH (1.7 m) / 2 — audio pan reference (kept per-oval; fine for both)
-
 /** Pace/AI motor voices detune +26 cents (~+1.5%) above the player's 0. */
 const PACE_DETUNE_CENTS = 26;
 const MUTE_RAMP_TAU = 0.05;
 
-/** three-space camera offset (position − lookAt) of the tuned oval view; scaled by track size for others. */
+/**
+ * three-space camera offset (position − lookAt) tuned by eye for the oval at
+ * the established ~60° table angle with a slight asymmetric 3/4 twist.
+ * reframeCamera scales x/z independently by each track's own bbox half-extent
+ * against the oval's (the calibration reference), so the oval reproduces this
+ * exact offset (ratio 1:1) while other tracks — e.g. the figure-8, whose bbox
+ * is nearly square rather than oval-long — get a properly fitted view instead
+ * of a single uniform "radius" scale (which under-covered the figure-8's
+ * greater depth extent and clipped its lower lobe off-frame).
+ */
 const CAM_OFFSET = { x: 0.66, y: 1.76, z: 1.24 };
 
 const DEFAULT_CONFIG: RaceConfig = {
@@ -79,8 +85,8 @@ let engine: AudioEngine | undefined;
 let sfx: Sfx | undefined;
 let muted = false;
 
-/** Reference track radius (the oval's), so the camera frames every track the same. */
-let refRadius = 0;
+/** Reference track bbox half-extents (the oval's), so the camera frames every track with the same established margin. */
+let refHalfExtent = { x: 0, y: 0 };
 
 /** A live race: track + its render objects + sim + race machine. Rebuilt per race. */
 interface Session {
@@ -94,6 +100,9 @@ interface Session {
   race: RaceMachine;
   carConfigs: CarConfig[];
   motorVoices: MotorVoice[];
+  /** This track's own bbox centroid/half-width — audio pan reference (was a hardcoded oval-shaped constant). */
+  audioCenterX: number;
+  audioHalfWidth: number;
 }
 let session: Session | undefined;
 let racingTick = 0;
@@ -104,7 +113,8 @@ if (showLookDev) {
   camera.position.set(0, 1.05, 0.72);
   camera.lookAt(0, 0, 0);
 } else {
-  refRadius = computeCentroid(buildTrack(TRACKS.oval.refs)).radius;
+  const ovalBBox = computeTrackBBox(buildTrack(TRACKS.oval.refs));
+  refHalfExtent = { x: ovalBBox.hx, y: ovalBBox.hy };
   if (showDebug) addGroundPlane();
 
   inputManager = createInputManager();
@@ -148,7 +158,7 @@ function buildSession(config: RaceConfig): void {
   teardownSession();
 
   const track = buildTrack(TRACKS[config.trackId].refs);
-  const centroid = computeCentroid(track);
+  const bbox = computeTrackBBox(track);
 
   const trackMesh = createTrackMesh(track);
   scene.add(trackMesh.group);
@@ -162,7 +172,7 @@ function buildSession(config: RaceConfig): void {
   if (showDebug) {
     debugView = createDebugView(scene, track);
   } else {
-    environment = createEnvironment(scene, keyLight, { center: centroid });
+    environment = createEnvironment(scene, keyLight, { center: { x: bbox.cx, y: bbox.cy } });
     carsView = createCarsView(scene, track, styles);
   }
 
@@ -187,21 +197,34 @@ function buildSession(config: RaceConfig): void {
 
   const motorVoices = engine
     ? styles.map((_style, i) =>
-        createMotorVoice(engine!, { detuneCents: i === PLAYER_CAR_INDEX ? 0 : PACE_DETUNE_CENTS }),
+        createMotorVoice(engine!, { detuneCents: carConfigs[i]!.controlled !== 'input' ? PACE_DETUNE_CENTS : 0 }),
       )
     : [];
 
-  session = { config, track, trackMesh, environment, carsView, debugView, sim, race, carConfigs, motorVoices };
+  session = {
+    config,
+    track,
+    trackMesh,
+    environment,
+    carsView,
+    debugView,
+    sim,
+    race,
+    carConfigs,
+    motorVoices,
+    audioCenterX: bbox.cx,
+    audioHalfWidth: bbox.hx,
+  };
   racingTick = 0;
   resultsShown = false;
-  reframeCamera(centroid);
+  reframeCamera(bbox);
 }
 
 /** Give the current session motor voices (used when audio unlocks after the session was built). */
 function attachVoices(): void {
   if (!session || !engine || session.motorVoices.length > 0) return;
-  session.motorVoices = session.carConfigs.map((_c, i) =>
-    createMotorVoice(engine!, { detuneCents: i === PLAYER_CAR_INDEX ? 0 : PACE_DETUNE_CENTS }),
+  session.motorVoices = session.carConfigs.map((c) =>
+    createMotorVoice(engine!, { detuneCents: c.controlled !== 'input' ? PACE_DETUNE_CENTS : 0 }),
   );
 }
 
@@ -227,8 +250,17 @@ function showResults(): void {
 
 // ---- Camera framing ------------------------------------------------------
 
-/** Sim-plane bbox centroid + radius (half the larger extent) of a track's lane 0. */
-function computeCentroid(track: Track): { x: number; y: number; radius: number } {
+interface TrackBBox {
+  /** Sim-plane bbox center. */
+  cx: number;
+  cy: number;
+  /** Sim-plane bbox half-extents (x and y axes independently — NOT blended into one radius). */
+  hx: number;
+  hy: number;
+}
+
+/** Sim-plane bounding box of a track's lane 0, sampled densely enough to catch every lobe/curve. */
+function computeTrackBBox(track: Track): TrackBBox {
   const lane = track.lanes[0];
   let minx = Infinity;
   let maxx = -Infinity;
@@ -242,18 +274,32 @@ function computeCentroid(track: Track): { x: number; y: number; radius: number }
     miny = Math.min(miny, p.y);
     maxy = Math.max(maxy, p.y);
   }
-  return { x: (minx + maxx) / 2, y: (miny + maxy) / 2, radius: Math.max(maxx - minx, maxy - miny) / 2 };
+  return { cx: (minx + maxx) / 2, cy: (miny + maxy) / 2, hx: (maxx - minx) / 2, hy: (maxy - miny) / 2 };
 }
 
-function reframeCamera(centroid: { x: number; y: number; radius: number }): void {
-  const scale = refRadius > 0 ? centroid.radius / refRadius : 1;
-  const tx = centroid.x;
+/**
+ * Frame the camera on `bbox` by scaling CAM_OFFSET's x/z components
+ * INDEPENDENTLY against the oval reference's own half-extents, rather than
+ * one blended "radius" ratio. The oval is x-dominant (long straights, narrow
+ * width) — a single combined scale calibrated to its x extent under-covered
+ * the figure-8's much greater y/depth extent (a near-square bbox) and clipped
+ * its lower lobe off-frame. Scaling each axis by its own ratio reproduces the
+ * exact tuned oval offset when bbox === the oval (both ratios are 1) and
+ * fits every other track's true footprint with the same established margin.
+ * Height (offset.y) scales by the larger of the two ratios, so the camera
+ * pulls back enough to cover whichever axis grew the most.
+ */
+function reframeCamera(bbox: TrackBBox): void {
+  const scaleX = refHalfExtent.x > 0 ? bbox.hx / refHalfExtent.x : 1;
+  const scaleY = refHalfExtent.y > 0 ? bbox.hy / refHalfExtent.y : 1;
+  const scaleUp = Math.max(scaleX, scaleY);
+  const tx = bbox.cx;
   const ty = -0.02;
-  const tz = -centroid.y; // sim (x, y) → three (x, ·, −y)
+  const tz = -bbox.cy; // sim (x, y) → three (x, ·, −y)
   camera.fov = showDebug ? 45 : 38;
   camera.near = 0.05;
   camera.far = 20;
-  camera.position.set(tx + CAM_OFFSET.x * scale, ty + CAM_OFFSET.y * scale, tz + CAM_OFFSET.z * scale);
+  camera.position.set(tx + CAM_OFFSET.x * scaleX, ty + CAM_OFFSET.y * scaleUp, tz + CAM_OFFSET.z * scaleY);
   camera.lookAt(tx, ty, tz);
   camera.updateProjectionMatrix();
 }
@@ -332,7 +378,7 @@ function handleAudioEvents(events: SimEvent[]): void {
   for (const event of events) {
     if (event.type === 'deslot') {
       const x = session.sim.laneFor(event.carIndex).pointAt(event.atS).pos.x;
-      sfx.deslotClatter(panForX(x, TABLE_CENTER_X, TABLE_HALF_WIDTH));
+      sfx.deslotClatter(panForX(x, session.audioCenterX, session.audioHalfWidth));
     } else if (event.type === 'lap' && event.carIndex === PLAYER_CAR_INDEX) {
       sfx.lapBeep();
     }
@@ -381,11 +427,11 @@ function computeCarRenderPose(
     };
   }
   if (prevState.generation !== currState.generation) {
-    return { mode: 'slot', s: currState.s, slideYaw: currState.slideYaw, v: currState.v, lane: currState.lane, generation: currState.generation };
+    return { mode: 'slot', s: currState.s, slideYaw: currState.slideYaw, lane: currState.lane, generation: currState.generation };
   }
   const s = wrapLerp(prevState.s, currState.s, alpha, lane.totalLength);
   const slideYaw = lerp(prevState.slideYaw, currState.slideYaw, alpha);
-  return { mode: 'slot', s, slideYaw, v: currState.v, lane: currState.lane, generation: currState.generation };
+  return { mode: 'slot', s, slideYaw, lane: currState.lane, generation: currState.generation };
 }
 
 let lastTimestamp: number | undefined;
@@ -438,8 +484,8 @@ function frame(timestamp: number): void {
         throttle: throttleForVoice,
         x: pose.x,
         vmax: TUNING.vmax,
-        tableHalfWidth: TABLE_HALF_WIDTH,
-        centerX: TABLE_CENTER_X,
+        tableHalfWidth: session!.audioHalfWidth,
+        centerX: session!.audioCenterX,
       });
     });
 
