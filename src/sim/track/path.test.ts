@@ -99,6 +99,47 @@ describe('createLanePath — wrap', () => {
   });
 });
 
+describe('createLanePath — M12 elevation & banking fields', () => {
+  it('a flat, unbanked segment (no optional fields) reports bank/z/grade all 0', () => {
+    const path = createLanePath([{ type: 'line', p0: { x: 0, y: 0 }, p1: { x: 1, y: 0 }, length: 1 }]);
+    const p = path.pointAt(0.5);
+    expect(p.bank).toBe(0);
+    expect(p.z).toBe(0);
+    expect(p.grade).toBe(0);
+  });
+
+  it('a rising line ramps z linearly and reports the exact constant grade', () => {
+    const path = createLanePath([
+      { type: 'line', p0: { x: 0, y: 0 }, p1: { x: 2, y: 0 }, length: 2, z0: 0, z1: 0.1 },
+    ]);
+    expect(path.pointAt(0).z).toBeCloseTo(0, 12);
+    expect(path.pointAt(1).z).toBeCloseTo(0.05, 12); // halfway → half the rise
+    expect(path.pointAt(2 - 1e-9).z).toBeCloseTo(0.1, 9); // near the top (s=2 itself wraps to 0)
+    // grade = dz/ds = 0.1 / 2, constant everywhere on the piece.
+    for (const s of [0, 0.5, 1, 1.9]) expect(path.pointAt(s).grade).toBeCloseTo(0.05, 12);
+  });
+
+  it('a downhill line has a negative grade', () => {
+    const path = createLanePath([
+      { type: 'line', p0: { x: 0, y: 0 }, p1: { x: 1, y: 0 }, length: 1, z0: 0.1, z1: 0 },
+    ]);
+    expect(path.pointAt(0.5).grade).toBeCloseTo(-0.1, 12);
+    expect(path.pointAt(0.5).z).toBeCloseTo(0.05, 12);
+  });
+
+  it('a banked arc reports its constant bank (and preserves pos/heading/curvature)', () => {
+    const R = 0.2;
+    const path = createLanePath([
+      { type: 'arc', center: { x: 0, y: 0 }, radius: R, a0: 0, sweep: Math.PI / 2, length: R * (Math.PI / 2), bank: 0.5236 },
+    ]);
+    const p = path.pointAt(R * (Math.PI / 4)); // mid-arc
+    expect(p.bank).toBeCloseTo(0.5236, 12);
+    expect(p.curvature).toBeCloseTo(1 / R, 12);
+    expect(p.z).toBe(0); // banked but not elevated
+    expect(p.grade).toBe(0);
+  });
+});
+
 describe('createLanePath — oval (via builder)', () => {
   const track = buildTrack(OVAL_REFS);
 

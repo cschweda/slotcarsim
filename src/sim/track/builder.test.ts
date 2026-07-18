@@ -107,6 +107,86 @@ describe('buildTrack — lane geometry', () => {
   });
 });
 
+describe('buildTrack — M12 elevation closure & banking', () => {
+  const R = 9 * IN;
+
+  it('accepts a net-zero-rise loop (up then equal down closes in z)', () => {
+    // The oval, but the two long straights become a matched riser pair: +rise
+    // on the first, −rise on the second → the loop returns to z 0.
+    const refs: PieceRef[] = [
+      { piece: 'straight15', rise: 0.02 },
+      { piece: 'straight15' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'straight15', rise: -0.02 },
+      { piece: 'straight15' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'curve9_90', dir: 'left' },
+    ];
+    expect(() => buildTrack(refs)).not.toThrow();
+  });
+
+  it('rejects a loop that closes in x/y but NOT in elevation, naming the z gap', () => {
+    // Position/heading close (it is the oval), but one straight rises and
+    // nothing brings it back down → z gap ≈ 0.02 m.
+    const refs: PieceRef[] = [
+      { piece: 'straight15', rise: 0.02 },
+      { piece: 'straight15' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'straight15' },
+      { piece: 'straight15' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'curve9_90', dir: 'left' },
+    ];
+    expect(() => buildTrack(refs)).toThrow(
+      /^Track does not close in elevation: z gap [\d.]+ m after 8 pieces$/,
+    );
+  });
+
+  it('a rising straight yields a positive grade on both lanes; the flat oval yields grade 0 everywhere', () => {
+    const track = buildTrack([
+      { piece: 'straight15', rise: 0.02 },
+      { piece: 'straight15' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'straight15', rise: -0.02 },
+      { piece: 'straight15' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'curve9_90', dir: 'left' },
+    ]);
+    // Sample near the start of the first (rising) straight, both lanes.
+    for (const lane of track.lanes) {
+      expect(lane.pointAt(0.05).grade).toBeGreaterThan(0);
+      expect(lane.pointAt(0.05).bank).toBe(0);
+    }
+
+    const flat = buildTrack(
+      Array.from({ length: 4 }, () => ({ piece: 'curve9_90' as const, dir: 'left' as const })),
+    );
+    for (let s = 0; s < flat.lanes[0].totalLength; s += 0.05) {
+      expect(flat.lanes[0].pointAt(s).grade).toBe(0);
+      expect(flat.lanes[0].pointAt(s).z).toBe(0);
+    }
+  });
+
+  it('a banked curve carries a positive (into-the-turn) bank on both lanes', () => {
+    const track = buildTrack(
+      Array.from({ length: 4 }, () => ({ piece: 'curve9_90' as const, dir: 'left' as const, bank: 0.5236 })),
+    );
+    for (const lane of track.lanes) {
+      // Mid-first-piece sample: bank is the full magnitude, constant per piece.
+      expect(lane.pointAt(lane.totalLength / 8).bank).toBeCloseTo(0.5236, 12);
+    }
+    // Banking does NOT change plan-view geometry: lane lengths match the unbanked circle.
+    const flat = buildTrack(
+      Array.from({ length: 4 }, () => ({ piece: 'curve9_90' as const, dir: 'left' as const })),
+    );
+    expect(track.lanes[0].totalLength).toBeCloseTo(flat.lanes[0].totalLength, 12);
+    expect(track.lanes[0].totalLength).toBeCloseTo(2 * Math.PI * (R - d), 9);
+  });
+});
+
 describe('buildTrack — dir validation', () => {
   it('throws when a curve piece is missing dir', () => {
     const refs: PieceRef[] = [{ piece: 'curve9_90' }];

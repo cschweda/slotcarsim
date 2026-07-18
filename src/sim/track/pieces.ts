@@ -30,6 +30,23 @@ export type PieceDef =
 export interface PieceRef {
   piece: PieceId;
   dir?: 'left' | 'right';
+  /**
+   * M12 banking: surface bank magnitude in radians (always ≥ 0; applied banking
+   * INTO the turn, sign derived from `dir`). Curves only. Carried on the ref
+   * (per-use), not the PieceDef, because the same catalog curve — e.g.
+   * curve9_90 — is used UNBANKED by the oval/figure-8 and banked only by the
+   * Daytona Sweep; baking a bank into its def would tilt every use.
+   */
+  bank?: number;
+  /**
+   * M12 elevation: total centerline elevation change over this piece, in meters
+   * (linear ramp; +up, −down, absent/0 = flat). Valid on straights and curves.
+   * Per-use for the same reason as `bank`: the catalog straights double as flat
+   * pieces everywhere else, so an AFX "riser" is just an ordinary straight used
+   * with a rise here (keeps the 12-piece catalog — and its regression pin —
+   * intact, rather than adding straight9_up/… catalog entries).
+   */
+  rise?: number;
 }
 
 export const PIECES: Record<PieceId, PieceDef> = {

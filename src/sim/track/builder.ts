@@ -41,11 +41,14 @@ export interface BuildTrackOptions {
 
 const DEFAULT_CLOSURE_TOL = 1e-9;
 const HEADING_CLOSURE_TOL = 1e-9;
+const Z_CLOSURE_TOL = 1e-9;
 const LANES = [0, 1] as const;
 
 interface Pose {
   pos: Vec2;
   heading: number;
+  /** M12: centerline elevation above the table, meters. Accumulated across risers. */
+  z: number;
 }
 
 /** Two lanes, offset o = +d (lane 0) and o = −d (lane 1) from centerline. */
@@ -69,18 +72,19 @@ export function buildTrack(refs: readonly PieceRef[], opts: BuildTrackOptions = 
     pieces: [],
   };
 
-  const startPose: Pose = { pos: { x: 0, y: 0 }, heading: 0 };
+  const startPose: Pose = { pos: { x: 0, y: 0 }, heading: 0, z: 0 };
   let pose: Pose = startPose;
 
   for (const ref of refs) {
     const def = PIECES[ref.piece];
+    const rise = ref.rise ?? 0;
 
     if (def.kind === 'straight') {
       if (ref.dir !== undefined) {
         throw new Error(`Piece ${ref.piece} is a straight; dir must not be specified`);
       }
       const entry = pose;
-      pose = appendStraight(def.length, pose, state);
+      pose = appendStraight(def.length, rise, pose, state);
       state.pieces.push({
         piece: ref.piece,
         kind: 'straight',
@@ -93,7 +97,10 @@ export function buildTrack(refs: readonly PieceRef[], opts: BuildTrackOptions = 
         throw new Error(`Piece ${ref.piece} is a curve; dir ('left'|'right') is required`);
       }
       const entry = pose;
-      pose = appendCurve(def.radius, def.sweep, ref.dir, pose, state);
+      // bank magnitude, applied INTO the turn (positive per path.ts's sign
+      // convention — the renderer combines it with the κ sign to roll the
+      // correct way; the physics uses it directly).
+      pose = appendCurve(def.radius, def.sweep, ref.dir, ref.bank ?? 0, rise, pose, state);
       // Centerline arc midpoint: rotate the entry point about the arc center by
       // half the signed sweep. dir/radius/sweep recompute the same center the
       // append used (kept local to avoid threading it back out).
@@ -118,6 +125,16 @@ export function buildTrack(refs: readonly PieceRef[], opts: BuildTrackOptions = 
       `Track does not close: gap ${gap.toFixed(3)} m, heading error ${headingError.toFixed(3)} rad after ${refs.length} pieces`,
     );
   }
+  // M12: elevation must also return to the start height (net rise 0 around the
+  // loop). Kept a SEPARATE check after the position/heading one so the pinned
+  // position/heading message above is untouched — a flat track (every rise 0)
+  // never reaches here with a nonzero z gap.
+  const zGap = Math.abs(pose.z - startPose.z);
+  if (zGap >= Z_CLOSURE_TOL) {
+    throw new Error(
+      `Track does not close in elevation: z gap ${zGap.toFixed(4)} m after ${refs.length} pieces`,
+    );
+  }
 
   return {
     lanes: [createLanePath(state.laneSegments[0]), createLanePath(state.laneSegments[1])],
@@ -130,9 +147,10 @@ function midpoint(a: Vec2, b: Vec2): Vec2 {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
 
-function appendStraight(length: number, entry: Pose, state: BuildState): Pose {
+function appendStraight(length: number, rise: number, entry: Pose, state: BuildState): Pose {
   const exitPos = add(entry.pos, rot({ x: length, y: 0 }, entry.heading));
-  const exit: Pose = { pos: exitPos, heading: entry.heading };
+  const exitZ = entry.z + rise;
+  const exit: Pose = { pos: exitPos, heading: entry.heading, z: exitZ };
 
   for (const lane of LANES) {
     const o = LANE_OFFSETS[lane];
@@ -141,6 +159,11 @@ function appendStraight(length: number, entry: Pose, state: BuildState): Pose {
       p0: add(entry.pos, rot({ x: 0, y: o }, entry.heading)),
       p1: add(exit.pos, rot({ x: 0, y: o }, exit.heading)),
       length,
+      // Both lanes ride the same centerline elevation ramp (the piece is a
+      // rigid tilted plank; banking, if any, is a separate cross-section roll).
+      // Omit the fields entirely on a flat piece so pointAt returns exactly the
+      // pre-M12 z 0 / grade 0 (and the segment stays byte-identical).
+      ...(rise !== 0 ? { z0: entry.z, z1: exitZ } : {}),
     };
     pushSegment(state, lane, segment, length);
   }
@@ -152,6 +175,8 @@ function appendCurve(
   radius: number,
   sweep: number,
   dir: 'left' | 'right',
+  bank: number,
+  rise: number,
   entry: Pose,
   state: BuildState,
 ): Pose {
@@ -165,7 +190,8 @@ function appendCurve(
   const rel = sub(entry.pos, center);
   const a0 = Math.atan2(rel.y, rel.x);
   const exitPos = add(center, rot(rel, signedSweep));
-  const exit: Pose = { pos: exitPos, heading: entry.heading + signedSweep };
+  const exitZ = entry.z + rise;
+  const exit: Pose = { pos: exitPos, heading: entry.heading + signedSweep, z: exitZ };
 
   for (const lane of LANES) {
     const o = LANE_OFFSETS[lane];
@@ -181,6 +207,10 @@ function appendCurve(
       a0,
       sweep: signedSweep,
       length,
+      // Positive bank = banked into the turn (both lanes carry the same bank);
+      // omit on unbanked/flat curves so pointAt returns the exact pre-M12 zeros.
+      ...(bank !== 0 ? { bank } : {}),
+      ...(rise !== 0 ? { z0: entry.z, z1: exitZ } : {}),
     };
     pushSegment(state, lane, segment, length);
   }
