@@ -23,7 +23,10 @@ const ROADBED_TOP = 0.006;
  * theatrics need.
  */
 export type CarRenderPose =
-  | { mode: 'slot'; s: number; slideYaw: number; v: number; lane: number; generation: number }
+  // `v` was carried here but never read — wheel spin uses the actual Δs
+  // between consecutive frames (see `update()` below), a more accurate
+  // per-frame distance than v·dt would give across an interpolated alpha.
+  | { mode: 'slot'; s: number; slideYaw: number; lane: number; generation: number }
   | {
       mode: 'tumble';
       x: number;

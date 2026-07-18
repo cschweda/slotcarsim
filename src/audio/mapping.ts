@@ -6,8 +6,10 @@
 // "sound design" — are reviewable as plain numbers, not buried in WebAudio
 // node wiring.
 //
-// One-way dependency onto sim/math's `clamp`, matching the project's
-// documented dependency direction (audio/ consumes sim/, never the reverse).
+// One-way dependency onto sim/math's `clamp` and config/tuning's constants,
+// matching the project's documented dependency direction (audio/ consumes
+// sim/ and config/, never the reverse).
+import { TUNING } from '../config/tuning';
 import { clamp } from '../sim/math';
 
 /** Fundamental frequency floor/ceiling, in Hz — see motorF0. */
@@ -48,8 +50,8 @@ export interface MotorGains {
 
 /** Below this speed the car reads as fully stopped, not just slow. */
 const MOVING_V = 0.01;
-/** Below this trigger position the controller reads as released, not driving (mirrors, but is deliberately decoupled from, config/tuning.ts's throttleDeadband — this file has zero sim/config coupling by design). */
-const THROTTLE_DEADBAND = 0.02;
+/** Below this trigger position the controller reads as released, not driving — sourced from TUNING.throttleDeadband so the two never drift apart. */
+const THROTTLE_DEADBAND = TUNING.throttleDeadband;
 /** Tone never fully vanishes once rolling — a stopped-but-silent motor doesn't ease in from zero pitch. */
 const TONE_FLOOR = 0.15;
 

@@ -80,6 +80,7 @@ export function createMotorVoice(engine: AudioEngine, options: MotorVoiceOptions
   const buzzFilter = ctx.createBiquadFilter();
   buzzFilter.type = 'bandpass';
   buzzFilter.Q.value = BUZZ_Q;
+  buzzFilter.detune.value = detuneCents; // tracks the buzz oscillator's own detune so the passband stays centered on it
   const buzzGain = ctx.createGain();
   buzzGain.gain.value = 0;
   buzzOsc.connect(buzzFilter);
@@ -92,6 +93,7 @@ export function createMotorVoice(engine: AudioEngine, options: MotorVoiceOptions
   const hissFilter = ctx.createBiquadFilter();
   hissFilter.type = 'bandpass';
   hissFilter.Q.value = HISS_Q;
+  hissFilter.detune.value = detuneCents; // same fixed per-voice detune as every other branch (pace/AI ≈+26 cents)
   const hissGain = ctx.createGain();
   hissGain.gain.value = 0;
   hissSource.connect(hissFilter);
