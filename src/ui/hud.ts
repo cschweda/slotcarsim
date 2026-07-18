@@ -10,6 +10,8 @@ export interface HudUpdate {
   /** Player throttle, 0..1. */
   throttle: number;
   sourceLabel: string;
+  /** M6: true while the M-key dev/courtesy mute is active. */
+  muted: boolean;
 }
 
 export interface Hud {
@@ -45,6 +47,16 @@ function ensureStyles(): void {
     .m2-hud__source {
       opacity: 0.7;
       font-size: 11px;
+    }
+    .m2-hud__muted {
+      display: none;
+      color: #ff8a80;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      margin-top: 2px;
+    }
+    .m2-hud__muted--active {
+      display: block;
     }
     .m2-hud__bar {
       width: 14px;
@@ -85,8 +97,12 @@ export function createHud(container: HTMLElement): Hud {
   const lapLine = document.createElement('div');
   const sourceLine = document.createElement('div');
   sourceLine.className = 'm2-hud__source';
+  const mutedLine = document.createElement('div');
+  mutedLine.className = 'm2-hud__muted';
+  mutedLine.textContent = 'MUTED';
   panel.appendChild(lapLine);
   panel.appendChild(sourceLine);
+  panel.appendChild(mutedLine);
   root.appendChild(panel);
 
   const bar = document.createElement('div');
@@ -103,6 +119,7 @@ export function createHud(container: HTMLElement): Hud {
       `LAP ${state.lap} · LAST ${formatLapTime(state.lastLapSec)} ` +
       `· BEST ${formatLapTime(state.bestLapSec)}`;
     sourceLine.textContent = state.sourceLabel;
+    mutedLine.classList.toggle('m2-hud__muted--active', state.muted);
 
     const clamped = Math.min(1, Math.max(0, state.throttle));
     barFill.style.height = `${(clamped * 100).toFixed(1)}%`;

@@ -1,4 +1,11 @@
 import { Mesh, MeshBasicMaterial, PlaneGeometry } from 'three';
+import type { AudioEngine } from './audio/engine';
+import { MASTER_GAIN, createAudioEngine } from './audio/engine';
+import { panForX } from './audio/mapping';
+import type { MotorVoice } from './audio/motorVoice';
+import { createMotorVoice } from './audio/motorVoice';
+import type { Sfx } from './audio/sfx';
+import { createSfx } from './audio/sfx';
 import { TRACKS } from './config/tracks';
 import { TUNING } from './config/tuning';
 import { createInputManager } from './input/inputManager';
@@ -16,9 +23,27 @@ import { lerp, wrapLerp } from './sim/math';
 import { buildTrack } from './sim/track/builder';
 import type { CarState, InputFrame, SimEvent } from './sim/types';
 import type { LanePath } from './sim/track/path';
+import type { CarConfig } from './sim/world';
 import { createSim } from './sim/world';
 import { createDebugPanel } from './ui/debugPanel';
 import { createHud } from './ui/hud';
+import { createStartGate } from './ui/menus';
+
+// Mirrors render/environment.ts's TABLE_CENTER_X / (TABLE_WIDTH / 2) — kept as
+// local consts here rather than a new cross-module export, same call as
+// carsView.ts's ROADBED_TOP (a local mirror of trackMesh's internal ROAD_TOP)
+// rather than reaching into environment.ts's internals for one number.
+const TABLE_CENTER_X = 0.381;
+const TABLE_HALF_WIDTH = 0.85; // TABLE_WIDTH (1.7 m) / 2
+
+/**
+ * Pace/AI motor voices detune +26 cents (~+1.5%) above the player's 0 — see
+ * audio/mapping.ts's motorF0.
+ */
+const PACE_DETUNE_CENTS = 26;
+
+/** setTargetAtTime time constant for the M-key mute ramp — short, just enough to avoid a click. */
+const MUTE_RAMP_TAU = 0.05;
 
 const container = document.getElementById('app');
 if (!container) {
@@ -34,11 +59,20 @@ const sceneHandle = createScene(container, { quality });
 const { scene, camera, keyLight, render } = sceneHandle;
 
 let sim: ReturnType<typeof createSim> | undefined;
+let carConfigs: CarConfig[] = [];
 let carsView: CarsView | undefined; // photoreal AFX bodies (default view)
 let debugView: DebugView | undefined; // flat neon boxes (?debug)
 let inputManager: ReturnType<typeof createInputManager> | undefined;
 let hud: ReturnType<typeof createHud> | undefined;
 let debugPanel: ReturnType<typeof createDebugPanel> | undefined;
+
+// Audio (M6): created only once the start gate's onStart fires (see below) —
+// never eagerly, so the AudioContext is never constructed before a real
+// user gesture unlocks it.
+let engine: AudioEngine | undefined;
+let motorVoices: MotorVoice[] = [];
+let sfx: Sfx | undefined;
+let muted = false;
 
 // Player (car 0) lap-timing readout, updated as 'lap' SimEvents arrive.
 let lapCount = 0;
@@ -66,19 +100,40 @@ if (showLookDev) {
     carsView = createCarsView(scene, track, ['p917', 'f512']);
   }
 
-  sim = createSim({
-    track,
-    cars: [
-      { lane: 0, controlled: 'input' }, // the player
-      { lane: 1, controlled: 'constant', constantV: 1.5 }, // M2 pace-car placeholder
-    ],
-    cfg: TUNING,
-  });
+  carConfigs = [
+    { lane: 0, controlled: 'input' }, // the player
+    { lane: 1, controlled: 'constant', constantV: 1.5 }, // M2 pace-car placeholder
+  ];
+  sim = createSim({ track, cars: carConfigs, cfg: TUNING });
   inputManager = createInputManager();
   hud = createHud(document.body);
   debugPanel = createDebugPanel(TUNING);
 
   applyCameraFraming();
+
+  // Sim/render start immediately (attract mode — the pace car circulating
+  // silently is fine); audio is created/unlocked only from inside this real
+  // click/keydown handler, never before.
+  createStartGate(document.body, onStart);
+}
+
+/**
+ * Fires exactly once, synchronously inside the start gate's click/keydown
+ * handler. Creates the ONE AudioEngine, resumes it (ctx.resume() runs inside
+ * that same real-gesture call stack — never from a gamepad callback), then
+ * builds one persistent MotorVoice per car (player detune 0; every other car
+ * +PACE_DETUNE_CENTS) and the one-shot Sfx bank.
+ */
+function onStart(): void {
+  const newEngine = createAudioEngine();
+  newEngine.ensureRunning();
+  engine = newEngine;
+  motorVoices = sim
+    ? sim.carStates().map((_state, i) =>
+        createMotorVoice(newEngine, { detuneCents: i === 0 ? 0 : PACE_DETUNE_CENTS }),
+      )
+    : [];
+  sfx = createSfx(newEngine);
 }
 
 /**
@@ -127,6 +182,25 @@ function handlePlayerLapEvents(events: SimEvent[]): void {
     lastLapSec = event.lapTimeSec;
     if (bestLapSec === null || event.lapTimeSec < bestLapSec) {
       bestLapSec = event.lapTimeSec;
+    }
+  }
+}
+
+/**
+ * Reacts to sim events with sound: deslot clatter for ANY car (panned to
+ * where it left the track — the event's own `atS`, not the render-interpolated
+ * pose, so the pan is exact regardless of frame timing), lap beep for the
+ * player only. No-ops before the start gate fires (sfx is undefined).
+ */
+function handleAudioEvents(events: SimEvent[]): void {
+  if (!sim || !sfx) return;
+  for (const event of events) {
+    if (event.type === 'deslot') {
+      const lane = sim.laneFor(event.carIndex);
+      const x = lane.pointAt(event.atS).pos.x;
+      sfx.deslotClatter(panForX(x, TABLE_CENTER_X, TABLE_HALF_WIDTH));
+    } else if (event.type === 'lap' && event.carIndex === 0) {
+      sfx.lapBeep();
     }
   }
 }
@@ -228,11 +302,20 @@ function frame(timestamp: number): void {
     const alpha = loop.advance(dtFrame);
 
     handlePlayerLapEvents(frameEvents);
+    handleAudioEvents(frameEvents);
 
-    if (sim && (carsView || debugView)) {
+    if (sim) {
       const currentSim = sim; // narrowed const so the closures below are safe
       const prevStates = currentSim.prevCarStates();
       const currStates = currentSim.carStates();
+
+      // Every car's interpolated plan-view pose — computed once regardless of
+      // which render view is active, since audio panning needs each car's x
+      // position too, not just debugView.
+      const carPoses = currStates.map((curr, i) =>
+        computeCarPose(prevStates[i]!, curr, alpha, currentSim.laneFor(i)),
+      );
+
       if (carsView) {
         carsView.update(
           currStates.map((curr, i) =>
@@ -240,12 +323,29 @@ function frame(timestamp: number): void {
           ),
         );
       } else if (debugView) {
-        debugView.setCarPoses(
-          currStates.map((curr, i) =>
-            computeCarPose(prevStates[i]!, curr, alpha, currentSim.laneFor(i)),
-          ),
-        );
+        debugView.setCarPoses(carPoses);
       }
+
+      // Drive each car's persistent motor voice (no-op until the start gate's
+      // onStart has populated motorVoices). Constant-controlled cars have no
+      // real trigger, so they pass throttle = v/vmax for gain purposes (a
+      // circulating pace car should still sound "driven," not silent).
+      currStates.forEach((state, i) => {
+        const voice = motorVoices[i];
+        const config = carConfigs[i];
+        const pose = carPoses[i];
+        if (!voice || !config || !pose) return;
+        const throttleForVoice =
+          config.controlled === 'input' ? pendingInput.throttle : state.v / TUNING.vmax;
+        voice.update({
+          v: state.v,
+          throttle: throttleForVoice,
+          x: pose.x,
+          vmax: TUNING.vmax,
+          tableHalfWidth: TABLE_HALF_WIDTH,
+          centerX: TABLE_CENTER_X,
+        });
+      });
     }
 
     if (hud) {
@@ -255,6 +355,7 @@ function frame(timestamp: number): void {
         bestLapSec,
         throttle: pendingInput.throttle,
         sourceLabel: inputManager ? inputManager.activeSourceLabel() : '',
+        muted,
       });
     }
 
@@ -281,4 +382,14 @@ document.addEventListener('visibilitychange', () => {
     lastTimestamp = undefined;
     loop.reset();
   }
+});
+
+// 'M': dev/courtesy mute — toggles master gain 0 <-> MASTER_GAIN. A no-op
+// before the start gate fires (engine is undefined until then). Ramped (not
+// a direct .value= jump) to avoid an audible click on toggle; HUD shows a
+// small "MUTED" indicator while active.
+window.addEventListener('keydown', (event) => {
+  if (event.code !== 'KeyM' || !engine) return;
+  muted = !muted;
+  engine.master.gain.setTargetAtTime(muted ? 0 : MASTER_GAIN, engine.ctx.currentTime, MUTE_RAMP_TAU);
 });
