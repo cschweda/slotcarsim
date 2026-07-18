@@ -397,6 +397,87 @@ export function createReplayButton(host: HTMLElement, onClick: () => void): Repl
   return { setVisible };
 }
 
+// ---- M13: camera view button ----------------------------------------------
+// A discoverable, clickable way to cycle table → chase → cockpit — stacked
+// directly below the REPLAY button (same top-right corner, same matched-pair
+// visual style). Clicking runs the SAME cycle path as the `C` key, and its
+// label reflects the live view (plus the cockpit ½×/1× time chip), so the
+// button and the keyboard shortcut can never disagree.
+
+const CAMERA_BUTTON_STYLE_ID = 'm13-camera-button-style';
+
+function ensureCameraButtonStyles(): void {
+  if (document.getElementById(CAMERA_BUTTON_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = CAMERA_BUTTON_STYLE_ID;
+  style.textContent = `
+    .m13-camera-button {
+      position: fixed;
+      top: 138px;
+      right: 12px;
+      z-index: 110;
+      display: none;
+      font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: #e8e8e8;
+      background: rgba(10, 10, 12, 0.72);
+      border: 1px solid rgba(255, 180, 84, 0.22);
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .m13-camera-button:hover {
+      border-color: rgba(255, 180, 84, 0.5);
+    }
+    .m13-camera-button--visible {
+      display: block;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+export type CameraViewLabel = 'table' | 'chase' | 'cockpit';
+
+export interface CameraButton {
+  /** Reflect the live view + cockpit ½×/1× state in the label (never drives the camera itself — main.ts's rig is the source of truth, same pattern as the sound toggle). */
+  set(view: CameraViewLabel, cockpitHalfSpeed: boolean): void;
+  /** Shown only while a race is live (countdown/racing), like the MENU/REPLAY buttons. */
+  setVisible(visible: boolean): void;
+}
+
+/**
+ * Persistent top-right "VIEW" button, stacked below REPLAY. Its click always
+ * runs main.ts's one cycleCameraView() path — table → chase → cockpit → table
+ * — so this button and the `C` key stay in lockstep.
+ */
+export function createCameraButton(host: HTMLElement, onClick: () => void): CameraButton {
+  ensureCameraButtonStyles();
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'm13-camera-button';
+  host.appendChild(button);
+  button.addEventListener('click', onClick);
+
+  function set(view: CameraViewLabel, cockpitHalfSpeed: boolean): void {
+    const name = view === 'cockpit' ? 'COCKPIT' : view === 'chase' ? 'CHASE' : 'TABLE';
+    const chip = view === 'cockpit' ? ` ${cockpitHalfSpeed ? '½×' : '1×'}` : '';
+    button.textContent = `🎥 ${name}${chip}`;
+    button.setAttribute('aria-label', `Camera view: ${name}. Click to cycle table, chase, cockpit.`);
+  }
+
+  function setVisible(visible: boolean): void {
+    button.classList.toggle('m13-camera-button--visible', visible);
+  }
+
+  set('table', true);
+  return { set, setVisible };
+}
+
 const REPLAY_BANNER_STYLE_ID = 'm11b-replay-banner-style';
 
 function ensureReplayBannerStyles(): void {

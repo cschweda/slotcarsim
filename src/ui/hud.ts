@@ -30,6 +30,10 @@ export interface HudUpdate {
   showGamepadHint?: boolean;
   /** M10: practice mode — replaces the "LAP n" header with "PRACTICE · LAP n". */
   practice?: boolean;
+  /** M13: current camera view — a small badge appears for chase/cockpit (table = no badge). */
+  cameraView?: 'table' | 'chase' | 'cockpit';
+  /** M13: in cockpit, whether time is running at ½× (default) or 1× (T pressed) — drives the badge's ½×/1× suffix. */
+  cockpitHalfSpeed?: boolean;
 }
 
 export interface Hud {
@@ -98,6 +102,27 @@ function ensureStyles(): void {
       opacity: 0.7;
       font-size: 11px;
       margin-top: 4px;
+    }
+    .m2-hud__view {
+      display: none;
+      margin-top: 5px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: #9fd3ff;
+    }
+    .m2-hud__view--show { display: block; }
+    .m2-hud__view-speed {
+      margin-left: 6px;
+      padding: 0 5px;
+      border-radius: 3px;
+      color: #0e0c0a;
+      background: ${AMBER};
+    }
+    .m2-hud__view-speed--full {
+      color: ${AMBER};
+      background: transparent;
+      border: 1px solid rgba(255, 180, 84, 0.5);
     }
     .m2-hud__gamepad-hint {
       display: none;
@@ -188,7 +213,15 @@ export function createHud(container: HTMLElement): Hud {
   gamepadHintLine.className = 'm2-hud__gamepad-hint';
   gamepadHintLine.textContent = 'Squeeze the trigger to connect a gamepad';
 
-  panel.append(lapLine, timesLine, opponentLine, sourceLine, gamepadHintLine);
+  // M13: camera-view badge (with the cockpit ½×/1× time-scale chip).
+  const viewLine = document.createElement('div');
+  viewLine.className = 'm2-hud__view';
+  const viewName = document.createElement('span');
+  const viewSpeed = document.createElement('span');
+  viewSpeed.className = 'm2-hud__view-speed';
+  viewLine.append(viewName, viewSpeed);
+
+  panel.append(lapLine, timesLine, opponentLine, sourceLine, gamepadHintLine, viewLine);
   root.appendChild(panel);
 
   const bar = document.createElement('div');
@@ -244,6 +277,23 @@ export function createHud(container: HTMLElement): Hud {
 
     const clamped = Math.min(1, Math.max(0, state.throttle));
     barFill.style.height = `${(clamped * 100).toFixed(1)}%`;
+
+    // M13: camera-view badge — shown for chase/cockpit only; cockpit carries a
+    // ½× (default) or 1× (T pressed) time-scale chip.
+    const view = state.cameraView;
+    const showView = view === 'chase' || view === 'cockpit';
+    viewLine.classList.toggle('m2-hud__view--show', showView);
+    if (showView) {
+      viewName.textContent = view === 'cockpit' ? '● COCKPIT' : '● CHASE';
+      if (view === 'cockpit') {
+        const full = state.cockpitHalfSpeed === false;
+        viewSpeed.textContent = full ? '1×' : '½×';
+        viewSpeed.classList.toggle('m2-hud__view-speed--full', full);
+        viewSpeed.style.display = '';
+      } else {
+        viewSpeed.style.display = 'none';
+      }
+    }
   }
 
   function flashMessage(text: string): void {
