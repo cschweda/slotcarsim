@@ -7,7 +7,7 @@
 // render/carsView.ts already computed for the player's car this frame (its
 // world position = the guide pin, and its world quaternion = the full 3D
 // pin-guided pose, including M12 bank roll / grade pitch / elevation). We
-// never recompute the pose here — carsView.playerAnchor() hands us the live
+// never recompute the pose here — carsView.carAnchor() hands us the live
 // group.position/quaternion, and this module only offsets/looks along them,
 // so a banked end genuinely rolls the cockpit horizon and a climb pitches the
 // view up, for free, by construction.
