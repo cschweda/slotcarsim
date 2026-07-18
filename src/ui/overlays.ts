@@ -223,6 +223,78 @@ export function createSoundToggle(
   return { set: render };
 }
 
+// ---- Menu button -----------------------------------------------------------
+// M10: a discoverable, clickable way back to the setup menu — Esc already
+// does this, but is invisible to mouse/gamepad players who never learn a
+// keyboard shortcut exists. Stacks directly below the sound toggle (same
+// fixed top-right corner, same visual style) so the two read as a matched
+// pair of always-available session controls.
+
+const MENU_BUTTON_STYLE_ID = 'm10-menu-button-style';
+
+function ensureMenuButtonStyles(): void {
+  if (document.getElementById(MENU_BUTTON_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = MENU_BUTTON_STYLE_ID;
+  style.textContent = `
+    .m10-menu-button {
+      position: fixed;
+      top: 54px;
+      right: 12px;
+      z-index: 110;
+      display: none;
+      font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: #e8e8e8;
+      background: rgba(10, 10, 12, 0.72);
+      border: 1px solid rgba(255, 180, 84, 0.22);
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .m10-menu-button:hover {
+      border-color: rgba(255, 180, 84, 0.5);
+    }
+    .m10-menu-button--visible {
+      display: block;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+export interface MenuButton {
+  /** Shown only while a race is actually live (countdown/racing) — the menu/results screens already have their own way back, and the idle default session sits behind either the start gate or an already-open menu. */
+  setVisible(visible: boolean): void;
+}
+
+/**
+ * Persistent top-right "MENU" button. Clicking it runs the EXACT same
+ * abort-to-menu path as pressing Esc (main.ts funnels both through one
+ * function) — this is purely a discoverability affordance for players who'd
+ * never find the keyboard shortcut, not a second code path to keep in sync.
+ */
+export function createMenuButton(host: HTMLElement, onClick: () => void): MenuButton {
+  ensureMenuButtonStyles();
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'm10-menu-button';
+  button.textContent = '☰ MENU';
+  button.setAttribute('aria-label', 'Return to the setup menu');
+  host.appendChild(button);
+  button.addEventListener('click', onClick);
+
+  function setVisible(visible: boolean): void {
+    button.classList.toggle('m10-menu-button--visible', visible);
+  }
+
+  return { setVisible };
+}
+
 export function createCalibrationOverlay(host: HTMLElement): CalibrationOverlay {
   ensureCalibrationStyles();
 
