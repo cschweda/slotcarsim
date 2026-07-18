@@ -1,11 +1,12 @@
-import { Euler, Vector3 } from 'three';
+import { Euler, Scene, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { TRACKS } from '../config/tracks';
 import { wrapAngle } from '../sim/math';
 import { buildTrack } from '../sim/track/builder';
 import { createLanePath } from '../sim/track/path';
+import type { Track } from '../sim/track/builder';
 import { WHEELBASE } from './carMesh';
-import { slotElevation, slotOrientation, TUMBLE_FALL_END, tumbleFallZ, tumbleTheatrics } from './carsView';
+import { createCarsView, slotElevation, slotOrientation, TUMBLE_FALL_END, tumbleFallZ, tumbleTheatrics, type CarRenderPose } from './carsView';
 
 const track = buildTrack(TRACKS.oval.refs);
 const lane = track.lanes[0];
@@ -289,3 +290,104 @@ function circumcenter(
     d;
   return { x: ux, y: uy };
 }
+
+// =====================================================================
+// carsView.update() integration test — drives the real rotation.set() line
+// =====================================================================
+
+describe('carsView.update() — real rotation.set(bankRoll, yaw, gradePitch, YXZ) with banked+graded pose', () => {
+  /**
+   * A stub track with one lane that is both banked (θ=0.5236) and graded
+   * (grade=0.08) on a non-axis-aligned arc. This guards against a
+   * rotation.set() slot swap (gradePitch ↔ bankRoll) that would evade
+   * tests checking the formula locally. The real nose/up vectors after
+   * update() is the only reliable detector.
+   */
+  function createBankedGradedTrack(): { track: Track; laneIndex: number } {
+    const THETA = 0.5236; // 30 degrees
+    const GRADE = 0.08;
+    const R = 0.2;
+
+    // A left arc (κ > 0), non-axis-aligned (heading at s=0 is not 0 or π/2).
+    // Center at (-R, 0) sim → (−R, 0) three, arc from angle 0 to π/2.
+    const bankedGradedLane = createLanePath([
+      {
+        type: 'arc',
+        center: { x: -R, y: 0 },
+        radius: R,
+        a0: 0,
+        sweep: Math.PI / 2,
+        length: R * (Math.PI / 2),
+        bank: THETA,
+        z0: 0,
+        z1: GRADE * R * (Math.PI / 2), // grade = rise/run
+      },
+    ]);
+
+    // Wrap into a Track-like object with a single lane at index 0.
+    const stubTrack: Track = {
+      lanes: [bankedGradedLane],
+      pieceBoundaries: [[0, R * (Math.PI / 2)]],
+    };
+
+    return { track: stubTrack, laneIndex: 0 };
+  }
+
+  it('nose climbs (world-Y > 0) on an uphill grade, and up-vector tilts toward the turn center with the correct magnitude', () => {
+    const { track, laneIndex } = createBankedGradedTrack();
+    const scene = new Scene();
+    const view = createCarsView(scene, track, ['p917']);
+
+    // Sample mid-lane, where heading is non-axis-aligned and both bank/grade are nonzero.
+    const laneLength = track.lanes[laneIndex]!.totalLength;
+    const s = laneLength / 2;
+    const pt = track.lanes[laneIndex]!.pointAt(s);
+
+    // Confirm the test setup: banked and graded.
+    expect(Math.abs(pt.curvature)).toBeGreaterThan(0); // κ ≠ 0 (has bank)
+    expect(Math.abs(pt.grade ?? 0)).toBeGreaterThan(0.07); // grade ≠ 0
+
+    // Feed a slot-mode pose through the real update().
+    const pose: CarRenderPose = {
+      mode: 'slot',
+      s,
+      slideYaw: 0,
+      lane: laneIndex,
+      generation: 0,
+    };
+    view.update([pose]);
+
+    // Read back the car's actual rotation from the group.
+    const carGroup = scene.children[0]; // First added child is car 0's group.
+    expect(carGroup).toBeDefined();
+
+    // Transform nose and up through the applied rotation.
+    const nose = new Vector3(1, 0, 0).applyQuaternion(carGroup.quaternion);
+    const up = new Vector3(0, 1, 0).applyQuaternion(carGroup.quaternion);
+
+    // Assertion 1: nose climbs (uphill grade tips the nose up).
+    expect(nose.y).toBeGreaterThan(0);
+
+    // Assertion 2: up-vector tilts toward the turn center.
+    const centerSim = { x: -0.2, y: 0 }; // center of the stub arc in sim coords
+    const pinSim = pt.pos;
+
+    // Unit vector toward the center in three-space (sim (x,y) → three (x,-y)).
+    const dx = centerSim.x - pinSim.x;
+    const dz = -(centerSim.y - pinSim.y);
+    const len = Math.hypot(dx, dz) || 1;
+    const toward = { x: dx / len, z: dz / len };
+
+    // Horizontal component of up must point toward the center.
+    const horizLen = Math.hypot(up.x, up.z) || 1;
+    const dot = (up.x / horizLen) * toward.x + (up.z / horizLen) * toward.z;
+    expect(dot).toBeGreaterThan(0.9); // must be nearly aligned with center direction
+
+    // Assertion 3: tilt magnitude ≈ θ (0.5236 rad).
+    const THETA = 0.5236;
+    const tiltAngle = Math.acos(Math.min(1, Math.max(-1, up.y)));
+    expect(tiltAngle).toBeCloseTo(THETA, 1);
+
+    view.dispose();
+  });
+});
