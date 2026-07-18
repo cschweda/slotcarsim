@@ -29,7 +29,9 @@ import { PIECE_WIDTH } from '../sim/track/pieces';
 // the real mesh lands exactly under the car poses the sim drives.
 
 // ---- Cross-section dimensions (meters) ----
-const HALF_WIDTH = PIECE_WIDTH / 2; // 0.0381
+// Exported: curveGeometrySegments/guardrailPieceLayout need it, and so does
+// trackMesh.test.ts (chord-error / guardrail-layout tests).
+export const HALF_WIDTH = PIECE_WIDTH / 2; // 0.0381
 const ROAD_TOP = 0.006; // roadbed top surface, 6 mm above the table (y=0)
 const CHAMFER = 0.002; // 45deg bevel on the two outer roadbed edges
 const LANE_OFFSET = TUNING.laneOffset; // 0.01905 — slot centers at +-this, matches the sim lanes
@@ -73,6 +75,58 @@ export function arcSegmentCount(radius: number, sweepAbs: number): number {
   if (ratio >= 1) return 1;
   const maxHalfAngle = Math.acos(1 - ratio);
   return Math.max(1, Math.ceil(sweep / (2 * maxHalfAngle)));
+}
+
+/**
+ * Segment count for tessellating a curve PIECE's swept profile, given the
+ * piece's CENTERLINE radius and sweep. The roadbed/rail cross-section
+ * extends to +-HALF_WIDTH from the centerline, and chord error scales with
+ * radius, so the bound must hold at the widest radius actually swept
+ * (centerline + HALF_WIDTH) — the centerline itself under-tessellates the
+ * outer edge (e.g. curve9_90's outer edge would see ~0.228 mm of chord
+ * error, over the 0.2 mm bound). This is the function createTrackMesh calls
+ * to pick its per-piece segment count.
+ */
+export function curveGeometrySegments(centerlineRadius: number, sweepAbs: number): number {
+  return arcSegmentCount(centerlineRadius + HALF_WIDTH, sweepAbs);
+}
+
+export interface GuardrailPieceLayout {
+  /** The guardrail's own (outer) radius: centerline + HALF_WIDTH. */
+  radius: number;
+  /** Physical arc length of the guardrail's own path for this piece, in meters. */
+  arcLength: number;
+  /** Number of ~MODULE_LEN modules that fit this run, ~MODULE_GAP apart. */
+  moduleCount: number;
+  /** Physical length of the module run (modules + internal gaps), in meters. */
+  runLength: number;
+  /** Offset from the piece start to the run start, centering the run, in meters. */
+  runStart: number;
+  /** MODULE_LEN + MODULE_GAP, the per-module pitch, in meters. */
+  period: number;
+  /** Segment count for tessellating one module's own arc within the chord bound. */
+  moduleSegments: number;
+}
+
+/**
+ * Guardrail module/gap layout for one curve piece, given the piece's
+ * CENTERLINE radius/sweep. Modules and gaps must be sized in physical meters
+ * at the guardrail's OWN radius (centerline + HALF_WIDTH) — not the
+ * centerline — since that's the radius the guardrail is actually swept
+ * along. Sizing from the centerline inflates both by the radius ratio (e.g.
+ * on curve9_90: ~35 mm modules / ~1.75 mm gaps instead of the intended
+ * ~30 mm / ~1.5 mm).
+ */
+export function guardrailPieceLayout(centerlineRadius: number, sweepAbs: number): GuardrailPieceLayout {
+  const radius = centerlineRadius + HALF_WIDTH;
+  const arcLength = radius * sweepAbs;
+  const period = MODULE_LEN + MODULE_GAP;
+  const moduleCount = Math.max(1, Math.floor(arcLength / period));
+  const runLength = moduleCount * MODULE_LEN + (moduleCount - 1) * MODULE_GAP;
+  const runStart = (arcLength - runLength) / 2;
+  const moduleSweep = sweepAbs * (MODULE_LEN / arcLength);
+  const moduleSegments = Math.max(1, arcSegmentCount(radius, moduleSweep));
+  return { radius, arcLength, moduleCount, runLength, runStart, period, moduleSegments };
 }
 
 type MaterialId = 'road' | 'slot' | 'rail' | 'guard';
@@ -331,7 +385,7 @@ export function createTrackMesh(track: Track): TrackMesh {
     const absSweep = Math.abs(sweep);
     const centerLen = (s0End - s0Start + (s1End - s1Start)) / 2;
     const isStraight = absSweep < STRAIGHT_EPS;
-    const segments = isStraight ? 1 : arcSegmentCount(centerLen / absSweep, absSweep);
+    const segments = isStraight ? 1 : curveGeometrySegments(centerLen / absSweep, absSweep);
 
     // Exact centerline sample at piece fraction t: midpoint of the two lanes.
     const sample = (t: number): Station => {
@@ -357,20 +411,17 @@ export function createTrackMesh(track: Track): TrackMesh {
       // Guardrails ride the OUTSIDE edge: −offset for a left turn, +offset for a right.
       const flip = sweep < 0;
       const edges = sweep < 0 ? guardRight : guardLeft;
-      const radius = centerLen / absSweep;
-      const period = MODULE_LEN + MODULE_GAP;
-      const moduleCount = Math.max(1, Math.floor(centerLen / period));
-      const runLength = moduleCount * MODULE_LEN + (moduleCount - 1) * MODULE_GAP;
-      const runStart = (centerLen - runLength) / 2;
-      const moduleSweep = absSweep * (MODULE_LEN / centerLen);
-      const moduleSegments = Math.max(1, arcSegmentCount(radius, moduleSweep));
+      const { arcLength: guardLen, moduleCount, runStart, period, moduleSegments } = guardrailPieceLayout(
+        centerLen / absSweep,
+        absSweep,
+      );
 
       for (let m = 0; m < moduleCount; m++) {
         const sA = runStart + m * period;
         const modStations: Station[] = [];
         for (let j = 0; j <= moduleSegments; j++) {
           const along = (MODULE_LEN * j) / moduleSegments;
-          modStations.push(sample((sA + along) / centerLen));
+          modStations.push(sample((sA + along) / guardLen));
         }
         for (const edge of edges) guardGeoms.push(sweepRibbon(modStations, edge, flip));
       }

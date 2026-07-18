@@ -2,7 +2,16 @@ import { BufferGeometry, Group, Mesh } from 'three';
 import { describe, expect, it } from 'vitest';
 import { TRACKS } from '../config/tracks';
 import { buildTrack } from '../sim/track/builder';
-import { CHORD_TOL, arcSegmentCount, createTrackMesh } from './trackMesh';
+import { PIECES } from '../sim/track/pieces';
+import type { PieceDef } from '../sim/track/pieces';
+import {
+  CHORD_TOL,
+  HALF_WIDTH,
+  arcSegmentCount,
+  createTrackMesh,
+  curveGeometrySegments,
+  guardrailPieceLayout,
+} from './trackMesh';
 
 // The exact sagitta of one tessellated arc segment: for an arc of radius R
 // split into n equal segments spanning `sweep` total radians, the max chord
@@ -16,6 +25,12 @@ function chordError(radius: number, sweep: number, segments: number): number {
 const IN = 0.0254;
 const CATALOG_RADII = [6 * IN, 9 * IN, 12 * IN];
 const CATALOG_SWEEPS = [Math.PI / 2, Math.PI / 4];
+
+// The full catalog-curve set (centerline radius + sweep), pulled from the
+// actual piece catalog (not re-derived) so this tracks the catalog itself.
+const CATALOG_CURVES = Object.values(PIECES).filter(
+  (p): p is Extract<PieceDef, { kind: 'curve' }> => p.kind === 'curve',
+);
 
 describe('arcSegmentCount', () => {
   it('keeps the chord error under 0.2 mm on the tightest catalog radius (6")', () => {
@@ -48,6 +63,49 @@ describe('arcSegmentCount', () => {
   it('never returns fewer than one segment for a degenerate/near-zero sweep', () => {
     expect(arcSegmentCount(0.2286, 1e-9)).toBeGreaterThanOrEqual(1);
     expect(arcSegmentCount(0.2286, 0)).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// The cross-section is swept out to +-HALF_WIDTH from the centerline, so the
+// chord-tolerance bound must hold at the widest radius actually reached
+// (centerline + HALF_WIDTH) -- not the centerline arcSegmentCount is handed.
+// curveGeometrySegments is the function createTrackMesh actually calls to
+// pick its per-piece segment count, so this exercises the real decision.
+describe('curveGeometrySegments (tessellation at the swept OUTER radius)', () => {
+  it('keeps the chord error under 0.2 mm at the outer radius (centerline + HALF_WIDTH) for every catalog curve', () => {
+    for (const { radius, sweep } of CATALOG_CURVES) {
+      const outerRadius = radius + HALF_WIDTH;
+      const segments = curveGeometrySegments(radius, sweep);
+      expect(chordError(outerRadius, sweep, segments)).toBeLessThan(CHORD_TOL);
+    }
+  });
+});
+
+// Guardrail modules/gaps must be physically ~MODULE_LEN / ~MODULE_GAP on the
+// guardrail's OWN radius (centerline + HALF_WIDTH), since that's the radius
+// the guardrail is actually swept along -- not the (smaller) centerline,
+// which inflates both by the radius ratio (e.g. curve9_90 would render ~35mm
+// modules / ~1.75mm gaps instead of the intended ~30mm / ~1.5mm). Expected
+// counts below are computed from the guardrail radius: floor(((R +
+// HALF_WIDTH) * sweep) / (MODULE_LEN + MODULE_GAP)).
+describe('guardrailPieceLayout (module/gap sizing on the guardrail radius, not the centerline)', () => {
+  const expected: Array<{ id: keyof typeof PIECES; moduleCount: number }> = [
+    { id: 'curve6_90', moduleCount: 9 },
+    { id: 'curve9_90', moduleCount: 13 },
+    { id: 'curve12_90', moduleCount: 17 },
+    { id: 'curve6_45', moduleCount: 4 },
+    { id: 'curve9_45', moduleCount: 6 },
+    { id: 'curve12_45', moduleCount: 8 },
+  ];
+
+  expected.forEach(({ id, moduleCount }) => {
+    it(`${id}: layout radius is centerline + HALF_WIDTH and module count is ${moduleCount}`, () => {
+      const piece = PIECES[id];
+      if (piece.kind !== 'curve') throw new Error(`${id} is not a curve`);
+      const layout = guardrailPieceLayout(piece.radius, piece.sweep);
+      expect(layout.radius).toBeCloseTo(piece.radius + HALF_WIDTH, 15);
+      expect(layout.moduleCount).toBe(moduleCount);
+    });
   });
 });
 
