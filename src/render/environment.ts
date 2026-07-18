@@ -21,10 +21,11 @@ import {
 // quality preset); this module re-aims it over the table center and shrink-
 // wraps its shadow camera to the table, because the table dimensions live here.
 
-// Sim-plane centroid of the oval bounding box (see task brief / builder walk):
-// the table is centered under it. Sim (x, y) -> three (x, ·, -y).
-const TABLE_CENTER_X = 0.381;
-const TABLE_CENTER_Z = -0.2286;
+// Default centroid (the oval's) the table sits under. Sim (x, y) -> three
+// (x, ·, -y). M7 passes the active track's centroid so the figure-8 is centered
+// on the table too, not just the oval.
+const DEFAULT_CENTER_X = 0.381;
+const DEFAULT_CENTER_Z = -0.2286;
 const TABLE_WIDTH = 1.7; // along three x
 const TABLE_DEPTH = 0.9; // along three z
 const TABLE_THICKNESS = 0.018; // ~18 mm slab
@@ -167,7 +168,19 @@ export interface Environment {
   dispose(): void;
 }
 
-export function createEnvironment(scene: Scene, keyLight: SpotLight): Environment {
+export interface EnvironmentOptions {
+  /** Sim-plane centroid the table/light center on (defaults to the oval's). */
+  center?: { x: number; y: number };
+}
+
+export function createEnvironment(
+  scene: Scene,
+  keyLight: SpotLight,
+  options: EnvironmentOptions = {},
+): Environment {
+  // Sim (x, y) -> three (x, ·, -y): the table's three-z is -(sim y).
+  const TABLE_CENTER_X = options.center ? options.center.x : DEFAULT_CENTER_X;
+  const TABLE_CENTER_Z = options.center ? -options.center.y : DEFAULT_CENTER_Z;
   const meshes: Mesh[] = [];
   const geometries: (BoxGeometry | PlaneGeometry)[] = [];
   const materials: Material[] = [];

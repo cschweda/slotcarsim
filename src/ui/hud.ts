@@ -12,6 +12,10 @@ export interface HudUpdate {
   sourceLabel: string;
   /** M6: true while the M-key dev/courtesy mute is active. */
   muted: boolean;
+  /** M7: laps to win — renders "LAP n / target" when set (a race). */
+  lapTarget?: number;
+  /** M7: the AI opponent's lap count, shown as a second line when set (a race). */
+  opponentLap?: number | null;
 }
 
 export interface Hud {
@@ -95,12 +99,15 @@ export function createHud(container: HTMLElement): Hud {
   // only ever comes from our own ThrottleSource constants, but this way
   // there is no HTML-injection surface at all, now or if that ever changes.
   const lapLine = document.createElement('div');
+  const opponentLine = document.createElement('div');
+  opponentLine.className = 'm2-hud__source';
   const sourceLine = document.createElement('div');
   sourceLine.className = 'm2-hud__source';
   const mutedLine = document.createElement('div');
   mutedLine.className = 'm2-hud__muted';
   mutedLine.textContent = 'MUTED';
   panel.appendChild(lapLine);
+  panel.appendChild(opponentLine);
   panel.appendChild(sourceLine);
   panel.appendChild(mutedLine);
   root.appendChild(panel);
@@ -115,9 +122,14 @@ export function createHud(container: HTMLElement): Hud {
   container.appendChild(root);
 
   function update(state: HudUpdate): void {
+    const lapText = state.lapTarget ? `LAP ${state.lap}/${state.lapTarget}` : `LAP ${state.lap}`;
     lapLine.textContent =
-      `LAP ${state.lap} · LAST ${formatLapTime(state.lastLapSec)} ` +
-      `· BEST ${formatLapTime(state.bestLapSec)}`;
+      `${lapText} · LAST ${formatLapTime(state.lastLapSec)} · BEST ${formatLapTime(state.bestLapSec)}`;
+    if (state.opponentLap === undefined || state.opponentLap === null) {
+      opponentLine.textContent = '';
+    } else {
+      opponentLine.textContent = `AI ${state.opponentLap}${state.lapTarget ? `/${state.lapTarget}` : ''}`;
+    }
     sourceLine.textContent = state.sourceLabel;
     mutedLine.classList.toggle('m2-hud__muted--active', state.muted);
 
