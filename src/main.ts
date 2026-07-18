@@ -40,6 +40,17 @@ import { createMenuSystem, createStartGate } from './ui/menus';
 const PACE_DETUNE_CENTS = 26;
 const MUTE_RAMP_TAU = 0.05;
 
+// Countdown/calibration overlay constants — declared here (ahead of the
+// createCountdownOverlay/createCalibrationOverlay CALLS below, in the
+// showLookDev/else block) rather than down by their function definitions:
+// those calls run at module-evaluation time, and a const referenced from
+// inside a hoisted function body still throws "before initialization" if
+// the const's own declaration hasn't executed yet.
+const COUNTDOWN_STYLE_ID = 'm8-countdown-style';
+/** How long "GO" stays visible once shown, regardless of how fast the race phase moves on to 'racing'. */
+const GO_HOLD_MS = 700;
+const CALIBRATION_STYLE_ID = 'm8-calibration-style';
+
 /**
  * three-space camera offset (position − lookAt) tuned by eye for the oval at
  * the established ~60° table angle with a slight asymmetric 3/4 twist.
@@ -321,10 +332,7 @@ function addGroundPlane(): void {
 }
 
 // ---- Countdown overlay ---------------------------------------------------
-
-const COUNTDOWN_STYLE_ID = 'm8-countdown-style';
-/** How long "GO" stays visible once shown, regardless of how fast the race phase moves on to 'racing'. */
-const GO_HOLD_MS = 700;
+// (COUNTDOWN_STYLE_ID / GO_HOLD_MS are declared near the top of the file — see the comment there.)
 
 function ensureCountdownStyles(): void {
   if (document.getElementById(COUNTDOWN_STYLE_ID)) return;
@@ -415,8 +423,7 @@ function createCountdownOverlay(host: HTMLElement): CountdownOverlay {
 }
 
 // ---- Gamepad calibration overlay ------------------------------------------
-
-const CALIBRATION_STYLE_ID = 'm8-calibration-style';
+// (CALIBRATION_STYLE_ID is declared near the top of the file — see the comment there.)
 
 function ensureCalibrationStyles(): void {
   if (document.getElementById(CALIBRATION_STYLE_ID)) return;
