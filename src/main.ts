@@ -422,6 +422,18 @@ function frame(timestamp: number): void {
       session.debugView.setCarPoses(carPoses);
     }
 
+    // Contract: voices are silenced outside the racing phase. During
+    // countdown the cars are parked at v=0 anyway (zeros are harmless and
+    // consistent), but once a race ends (finished) or is Esc-aborted (idle)
+    // the sim stops advancing while this render loop keeps calling
+    // voice.update() every frame — feeding it the now-frozen state.v would
+    // leave the motors humming at a constant pitch forever behind the
+    // results/abort overlay. Zeroing v/throttle instead lets each voice's
+    // τ=0.03 setTargetAtTime glide fade them out naturally. This re-reads
+    // phase() fresh (rather than reusing this frame's `phase` local, read
+    // before loop.advance() above) so a race that finishes mid-frame goes
+    // silent that same frame instead of one frame late.
+    const racing = session.race.phase() === 'racing';
     currStates.forEach((state, i) => {
       const voice = session!.motorVoices[i];
       const config = session!.carConfigs[i];
@@ -429,8 +441,8 @@ function frame(timestamp: number): void {
       if (!voice || !config || !pose) return;
       const throttleForVoice = config.controlled === 'input' ? pendingInput.throttle : state.v / TUNING.vmax;
       voice.update({
-        v: state.v,
-        throttle: throttleForVoice,
+        v: racing ? state.v : 0,
+        throttle: racing ? throttleForVoice : 0,
         x: pose.x,
         vmax: TUNING.vmax,
         tableHalfWidth: session!.audioHalfWidth,
