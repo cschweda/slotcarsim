@@ -55,6 +55,10 @@ function discoverFallback(pad: Gamepad): FallbackControl | null {
 export const CALIBRATION_DURATION_SEC = 5;
 
 const CALIBRATION_STORAGE_KEY = 'slotcar.gamepadCalibration';
+/** Bumped only if the persisted shape changes again; a mismatch (including a legacy pre-version payload, which has no `version` key at all) discards the whole stored map rather than risk handing a differently-shaped entry to readStoredControl. */
+const CALIBRATION_STORAGE_VERSION = 1;
+/** Below this, rest/max are close enough to call the calibration degenerate — the same threshold readStoredControl's own span check uses. */
+const MIN_CALIBRATION_SPAN = 1e-3;
 
 interface StoredCalibration {
   kind: 'button' | 'axis';
@@ -67,13 +71,50 @@ interface StoredCalibration {
 
 type CalibrationMap = Record<string, StoredCalibration>;
 
+/** On-disk envelope: a version tag + the id→calibration map, so a future shape change (or a pre-version legacy payload) can be told apart from the current shape instead of silently misread. */
+interface PersistedCalibrations {
+  version: number;
+  entries: CalibrationMap;
+}
+
+/**
+ * Per-entry shape guard: `rest`/`max` must both be finite numbers with a
+ * non-degenerate span between them. Without this, a corrupted or hand-edited
+ * localStorage entry (e.g. a non-numeric `rest`) flows straight into
+ * readStoredControl's `(raw - cal.rest) / (cal.max - cal.rest)` — and
+ * `Math.abs(NaN) < 1e-6` is FALSE (any comparison against NaN is), so that
+ * function's own "degenerate calibration" guard does NOT catch it; a NaN
+ * throttle would reach the sim. Entries failing this check are dropped
+ * silently rather than surfacing an error to the player over a stale/corrupt
+ * calibration.
+ */
+function isValidStoredCalibration(value: unknown): value is StoredCalibration {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== 'button' && candidate.kind !== 'axis') return false;
+  if (typeof candidate.index !== 'number' || !Number.isFinite(candidate.index)) return false;
+  if (typeof candidate.rest !== 'number' || !Number.isFinite(candidate.rest)) return false;
+  if (typeof candidate.max !== 'number' || !Number.isFinite(candidate.max)) return false;
+  return Math.abs(candidate.max - candidate.rest) >= MIN_CALIBRATION_SPAN;
+}
+
 function loadCalibrations(): CalibrationMap {
   try {
     if (typeof localStorage === 'undefined') return {};
     const raw = localStorage.getItem(CALIBRATION_STORAGE_KEY);
     if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
-    return parsed !== null && typeof parsed === 'object' ? (parsed as CalibrationMap) : {};
+    if (parsed === null || typeof parsed !== 'object') return {};
+    const { version, entries } = parsed as Partial<PersistedCalibrations>;
+    // Missing (legacy pre-version payload) or mismatched version → the whole
+    // stored map is ignored, not just individual entries.
+    if (version !== CALIBRATION_STORAGE_VERSION) return {};
+    if (entries === null || typeof entries !== 'object') return {};
+    const clean: CalibrationMap = {};
+    for (const [id, entry] of Object.entries(entries)) {
+      if (isValidStoredCalibration(entry)) clean[id] = entry;
+    }
+    return clean;
   } catch {
     return {}; // corrupt/inaccessible storage — behave as if nothing were ever calibrated
   }
@@ -82,7 +123,8 @@ function loadCalibrations(): CalibrationMap {
 function saveCalibrations(map: CalibrationMap): void {
   try {
     if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(CALIBRATION_STORAGE_KEY, JSON.stringify(map));
+    const payload: PersistedCalibrations = { version: CALIBRATION_STORAGE_VERSION, entries: map };
+    localStorage.setItem(CALIBRATION_STORAGE_KEY, JSON.stringify(payload));
   } catch {
     // private-mode/quota — calibration just won't persist past this session
   }

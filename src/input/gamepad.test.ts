@@ -235,14 +235,15 @@ describe('calibration wizard — non-standard mapping', () => {
     const stored = localStorage.getItem('slotcar.gamepadCalibration');
     expect(stored).not.toBeNull();
     const parsed = JSON.parse(stored!);
-    expect(parsed['pad-persist']).toEqual({ kind: 'button', index: 0, rest: 0, max: 0.6 });
+    expect(parsed.version).toBe(1);
+    expect(parsed.entries['pad-persist']).toEqual({ kind: 'button', index: 0, rest: 0, max: 0.6 });
   });
 
   it('a fresh createGamepadThrottle() (simulated reload) reuses a persisted calibration without re-running the wizard', () => {
     const storage = new FakeStorage();
     storage.setItem(
       'slotcar.gamepadCalibration',
-      JSON.stringify({ 'pad-reload': { kind: 'button', index: 0, rest: 0, max: 0.6 } }),
+      JSON.stringify({ version: 1, entries: { 'pad-reload': { kind: 'button', index: 0, rest: 0, max: 0.6 } } }),
     );
     vi.stubGlobal('localStorage', storage);
 
@@ -341,6 +342,111 @@ describe('calibration wizard — non-standard mapping', () => {
         pad.buttons[0] = { value: i % 3 === 0 ? 0.5 : 0 };
       });
     }).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// M8 fix round 1: calibration storage validation
+// ===========================================================================
+// loadCalibrations used to trust localStorage's shape completely (an
+// unchecked `as CalibrationMap` cast) — a corrupted/hand-edited/legacy entry
+// with a non-finite rest/max flows straight into readStoredControl's
+// `(raw - cal.rest) / (cal.max - cal.rest)`, and Math.abs(NaN) < 1e-6 is
+// FALSE (any comparison against NaN is), so the "degenerate calibration"
+// guard there does NOT catch it — NaN throttle would reach the sim.
+// loadCalibrations itself is private, so every case below drives it from the
+// outside via createGamepadThrottle + a stubbed localStorage: a brand-new
+// non-standard pad with no USABLE stored calibration must fall back to the
+// wizard, proving the corrupt/invalid entry was dropped rather than handed
+// to readStoredControl (which — pre-fix — would both skip the wizard, since
+// it saw a truthy stored entry, AND return NaN).
+describe('calibration storage validation', () => {
+  function expectCleanFallback(id: string): void {
+    const buttons: FakeButton[] = Array.from({ length: 3 }, () => ({ value: 0 }));
+    const pad: FakePad = { id, mapping: '', buttons, axes: [] };
+    stubPads([pad]);
+    const source = createGamepadThrottle();
+
+    const dt = 0.1;
+    for (let i = 0; i < 5; i++) {
+      expect(Number.isNaN(source.read(dt))).toBe(false);
+    }
+    // A non-standard, never-before-seen id only skips the wizard if
+    // loadCalibrations handed back a usable stored entry for it — so seeing
+    // it still calibrating proves the bad entry was ignored, not misread.
+    expect(source.calibrating).toBe(true);
+  }
+
+  it('malformed JSON in storage is ignored (falls back to the wizard, never throws or NaNs)', () => {
+    const storage = new FakeStorage();
+    storage.setItem('slotcar.gamepadCalibration', '{not valid json');
+    vi.stubGlobal('localStorage', storage);
+
+    expect(() => expectCleanFallback('pad-malformed')).not.toThrow();
+  });
+
+  it('a non-finite (null) rest is dropped', () => {
+    const storage = new FakeStorage();
+    storage.setItem(
+      'slotcar.gamepadCalibration',
+      JSON.stringify({
+        version: 1,
+        entries: { 'pad-nan-rest': { kind: 'button', index: 0, rest: null, max: 0.6 } },
+      }),
+    );
+    vi.stubGlobal('localStorage', storage);
+
+    expectCleanFallback('pad-nan-rest');
+  });
+
+  it('a missing max is dropped', () => {
+    const storage = new FakeStorage();
+    storage.setItem(
+      'slotcar.gamepadCalibration',
+      JSON.stringify({ version: 1, entries: { 'pad-no-max': { kind: 'button', index: 0, rest: 0 } } }),
+    );
+    vi.stubGlobal('localStorage', storage);
+
+    expectCleanFallback('pad-no-max');
+  });
+
+  it('a degenerate span (|max - rest| < 1e-3) is dropped even when both are finite', () => {
+    const storage = new FakeStorage();
+    storage.setItem(
+      'slotcar.gamepadCalibration',
+      JSON.stringify({
+        version: 1,
+        entries: { 'pad-degenerate': { kind: 'button', index: 0, rest: 0.5, max: 0.5001 } },
+      }),
+    );
+    vi.stubGlobal('localStorage', storage);
+
+    expectCleanFallback('pad-degenerate');
+  });
+
+  it('a wrong version discards the entire stored map, even for otherwise-valid entries', () => {
+    const storage = new FakeStorage();
+    storage.setItem(
+      'slotcar.gamepadCalibration',
+      JSON.stringify({
+        version: 2,
+        entries: { 'pad-wrong-version': { kind: 'button', index: 0, rest: 0, max: 0.6 } },
+      }),
+    );
+    vi.stubGlobal('localStorage', storage);
+
+    expectCleanFallback('pad-wrong-version');
+  });
+
+  it('a legacy pre-versioned flat map (no version field at all) is discarded wholesale', () => {
+    const storage = new FakeStorage();
+    storage.setItem(
+      'slotcar.gamepadCalibration',
+      JSON.stringify({ 'pad-legacy': { kind: 'button', index: 0, rest: 0, max: 0.6 } }),
+    );
+    vi.stubGlobal('localStorage', storage);
+
+    expectCleanFallback('pad-legacy');
   });
 });
 
