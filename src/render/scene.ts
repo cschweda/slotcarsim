@@ -124,14 +124,26 @@ export function createScene(container: HTMLElement, options: SceneOptions = {}):
     camera.updateProjectionMatrix();
     renderer.setSize(width, height);
   }
-  window.addEventListener('resize', handleResize);
+  // A plain window 'resize' listener only fires for an actual browser-window
+  // resize — it misses `container`'s own box changing for any OTHER reason,
+  // e.g. main.ts's dev tuning panel docking/undocking as a sibling flex
+  // column with the window itself never resizing (M9 follow-up: the panel
+  // used to overlay the canvas; now it shares the flex row, so the canvas
+  // must react when that sibling appears/disappears). ResizeObserver watches
+  // `container`'s actual box directly, so one mechanism covers both a window
+  // resize (which still changes container's box) AND a sibling-driven flex
+  // reflow — ResizeObserver also fires once immediately upon observe(), which
+  // just means this runs once redundantly right after the setSize() call a
+  // few lines above (harmless — handleResize is idempotent).
+  const resizeObserver = new ResizeObserver(handleResize);
+  resizeObserver.observe(container);
 
   function render(): void {
     renderer.render(scene, camera);
   }
 
   function dispose(): void {
-    window.removeEventListener('resize', handleResize);
+    resizeObserver.disconnect();
     environmentTexture.dispose();
     renderer.dispose();
     container.removeChild(renderer.domElement);
