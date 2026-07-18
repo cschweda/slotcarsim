@@ -17,11 +17,12 @@ import { createCoach } from './game/coach';
 import { readGamepadCameraInput, rumbleOnDeslot, rumbleOnReslot } from './input/gamepad';
 import { createInputManager } from './input/inputManager';
 import { DEFAULT_DT, createLoop } from './loop';
-import type { CarRenderPose, CarsView } from './render/carsView';
+import type { CarsView } from './render/carsView';
 import { createCarsView } from './render/carsView';
 import { ZOOM_DEFAULT, approachZoom, stepZoom, stepZoomFromStick } from './render/cameraZoom';
 import { panBoundsFromBBox, stepPan, stepPanFromStick, type PanBounds } from './render/cameraPan';
-import type { CarPose, DebugView } from './render/debugView';
+import { computeCarPose, computeCarRenderPose } from './render/carPose';
+import type { DebugView } from './render/debugView';
 import { createDebugView } from './render/debugView';
 import type { Environment } from './render/environment';
 import { createEnvironment } from './render/environment';
@@ -29,7 +30,6 @@ import { addLookDevContent } from './render/lookdev';
 import { createQualityLadder, createScene, type Quality } from './render/scene';
 import type { TrackMesh } from './render/trackMesh';
 import { createTrackMesh } from './render/trackMesh';
-import { tumblePose } from './sim/car/deslot';
 import { lerp, wrapLerp } from './sim/math';
 import type { Track } from './sim/track/builder';
 import { buildTrack } from './sim/track/builder';
@@ -579,55 +579,6 @@ function handleRumbleEvents(events: SimEvent[]): void {
     if (event.type === 'deslot') rumbleOnDeslot();
     else if (event.type === 'reslot') rumbleOnReslot();
   }
-}
-
-function computeCarPose(prevState: CarState, currState: CarState, alpha: number, lane: LanePath): CarPose {
-  if (currState.phase !== 'slot') {
-    const pose = tumblePose(
-      { phase: currState.phase, phaseTicks: currState.phaseTicks, tumble: currState.tumble! },
-      TUNING,
-      DEFAULT_DT,
-    );
-    return { x: pose.pos.x, y: pose.pos.y, yaw: pose.yaw, elevated: true };
-  }
-  if (prevState.generation !== currState.generation) {
-    const { pos, heading } = lane.pointAt(currState.s);
-    return { x: pos.x, y: pos.y, yaw: heading + currState.slideYaw };
-  }
-  const s = wrapLerp(prevState.s, currState.s, alpha, lane.totalLength);
-  const slideYaw = lerp(prevState.slideYaw, currState.slideYaw, alpha);
-  const { pos, heading } = lane.pointAt(s);
-  return { x: pos.x, y: pos.y, yaw: heading + slideYaw };
-}
-
-function computeCarRenderPose(
-  prevState: CarState,
-  currState: CarState,
-  alpha: number,
-  lane: LanePath,
-): CarRenderPose {
-  if (currState.phase !== 'slot') {
-    const pose = tumblePose(
-      { phase: currState.phase, phaseTicks: currState.phaseTicks, tumble: currState.tumble! },
-      TUNING,
-      DEFAULT_DT,
-    );
-    return {
-      mode: 'tumble',
-      x: pose.pos.x,
-      y: pose.pos.y,
-      yaw: pose.yaw,
-      yawRate: currState.tumble!.yawRate,
-      progress: pose.progress,
-      phase: currState.phase,
-    };
-  }
-  if (prevState.generation !== currState.generation) {
-    return { mode: 'slot', s: currState.s, slideYaw: currState.slideYaw, lane: currState.lane, generation: currState.generation };
-  }
-  const s = wrapLerp(prevState.s, currState.s, alpha, lane.totalLength);
-  const slideYaw = lerp(prevState.slideYaw, currState.slideYaw, alpha);
-  return { mode: 'slot', s, slideYaw, lane: currState.lane, generation: currState.generation };
 }
 
 let lastTimestamp: number | undefined;
