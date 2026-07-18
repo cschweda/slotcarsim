@@ -100,3 +100,55 @@ describe('buildSpeedProfile', () => {
     expect(cornerCap).toBeGreaterThan(0);
   });
 });
+
+describe('buildSpeedProfile — M12 banking & grade', () => {
+  const IN = 0.0254;
+  const daytona = buildTrack(TRACKS.daytonaSweep.refs);
+
+  it('a banked corner is capped FASTER than the identical flat corner (banking does real work)', () => {
+    // Same 9" inner-lane geometry, banked (Daytona) vs flat (oval) — the banked
+    // corner cap must be meaningfully higher.
+    const d = 0.9;
+    const bankedCap = Math.min(...buildSpeedProfile(daytona.lanes[0], TUNING, d).vCap);
+    const flatCap = Math.min(...buildSpeedProfile(oval.lanes[0], TUNING, d).vCap);
+    expect(bankedCap).toBeGreaterThan(flatCap);
+  });
+
+  it('a banked corner keeps the SAME fractional speed headroom below its deslot speed as a flat one', () => {
+    // The cap must sit at sqrt(margin) of the true (margin-1) deslot speed —
+    // the identical ratio a flat corner has — so the tight d=1 line is no more
+    // likely to trip on a bank than on the flat oval.
+    const d = 1.0;
+    const m = speedMargin(d);
+    const bankedCap = Math.min(...buildSpeedProfile(daytona.lanes[0], TUNING, d).vCap);
+    const rInner = 9 * IN - TUNING.laneOffset;
+    const bankedDeslot = Math.sqrt(
+      (TUNING.gripHard + TUNING.gravity * Math.sin(0.5236)) / ((1 / rInner) * Math.cos(0.5236)),
+    );
+    expect(bankedCap / bankedDeslot).toBeCloseTo(Math.sqrt(m), 6);
+  });
+
+  it('the grade backward pass brakes EARLIER on a downhill approach than on a flat one', () => {
+    // The oval, but the straight feeding the first corner is a downhill (and
+    // the opposite straight an equal uphill, so the loop still closes in z). A
+    // car gains speed rolling downhill, so it can brake less — the feasible
+    // speed on that approach must be LOWER than the flat oval's at the same s.
+    const downhillOval = buildTrack([
+      { piece: 'straight15' },
+      { piece: 'straight15', rise: -0.02 }, // downhill into corner 1
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'straight15' },
+      { piece: 'straight15', rise: 0.02 }, // matched uphill (net rise 0)
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'curve9_90', dir: 'left' },
+    ]);
+    const d = 0.9;
+    const graded = buildSpeedProfile(downhillOval.lanes[0], TUNING, d);
+    const flat = buildSpeedProfile(oval.lanes[0], TUNING, d);
+    // s ≈ 0.72 m sits in the braking ramp on the downhill piece (which runs
+    // 0.381–0.762 m). Rise doesn't change plan geometry, so the same s is the
+    // same point on both lanes.
+    expect(graded.at(0.72)).toBeLessThan(flat.at(0.72) - 1e-6);
+  });
+});
