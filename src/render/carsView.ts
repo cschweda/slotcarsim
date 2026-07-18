@@ -263,6 +263,11 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
   const cars: CarBody[] = styles.map((style) => buildCarBody(style));
   for (const car of cars) scene.add(car.group);
 
+  // M13: which cars are fully hidden (cockpit self-hiding). A hidden car shows
+  // neither its group (below) NOR its blob-shadow fallback (setBlobShadows),
+  // so first-person is truly free of the player's own car AND its ground decal.
+  const hiddenBody: boolean[] = styles.map(() => false);
+
   // Per-car wheel-spin bookkeeping: last lane-s and last generation. A
   // generation change (reslot teleport) or a tumble resets tracking so the
   // wheels don't spin across the jump.
@@ -333,7 +338,11 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
   }
 
   function setBlobShadows(enabled: boolean): void {
-    for (const blob of blobShadows) blob.visible = enabled;
+    // A fully-hidden car (cockpit) keeps its blob shadow off too, regardless of
+    // the global quality-ladder toggle.
+    blobShadows.forEach((blob, i) => {
+      blob.visible = enabled && !hiddenBody[i];
+    });
   }
 
   function carAnchor(index: number): CarAnchor | null {
@@ -352,8 +361,13 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
     // included) — TRUE first person shows none of the player's own car. The
     // group transform still updates each frame (update() ignores visibility),
     // so carAnchor() stays live and the car reappears in full the moment this
-    // is set back to visible.
+    // is set back to visible. hiddenBody also suppresses the blob-shadow decal.
+    hiddenBody[index] = hidden;
     car.group.visible = !hidden;
+    if (hidden) {
+      const blob = blobShadows[index];
+      if (blob) blob.visible = false;
+    }
   }
 
   function dispose(): void {

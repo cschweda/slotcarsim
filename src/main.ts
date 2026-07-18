@@ -860,7 +860,6 @@ function frame(timestamp: number): void {
       session.carsView.update(
         renderCurrStates.map((curr, i) => computeCarRenderPose(renderPrevStates[i]!, curr, renderAlpha, currentSim.laneFor(i))),
       );
-      session.carsView.setBlobShadows(qualityLadder?.blobShadowsActive() ?? false);
     } else if (session.debugView) {
       session.debugView.setCarPoses(carPoses);
     }
@@ -883,7 +882,10 @@ function frame(timestamp: number): void {
     // TRUE first person: hide the player's ENTIRE car in cockpit (zero of their
     // own geometry, on flat or banked track) — restored in full the instant the
     // view is chase/table or the deslot snap fires. AI car stays fully visible.
+    // Runs BEFORE setBlobShadows so a hidden player's blob-shadow decal is
+    // suppressed the same frame (no flicker into cockpit).
     session.carsView?.setBodyHidden(PLAYER_CAR_INDEX, effView === 'cockpit');
+    session.carsView?.setBlobShadows(qualityLadder?.blobShadowsActive() ?? false);
 
     // Contract: voices are silenced outside the racing phase. During
     // countdown the cars are parked at v=0 anyway (zeros are harmless and

@@ -303,6 +303,26 @@ describe('setBodyHidden — TRUE first-person cockpit hides the WHOLE player car
     view.dispose();
   });
 
+  it('suppresses the hidden car\'s blob-shadow decal too, even when the quality ladder enables blobs, and restores it', () => {
+    const scene = new Scene();
+    const view = createCarsView(scene, track, ['p917']);
+    // The single non-Group scene child is the car's blob-shadow quad.
+    const blob = scene.children.find((o) => (o as { isMesh?: boolean }).isMesh)!;
+
+    view.setBlobShadows(true);
+    expect(blob.visible).toBe(true); // normally on at the shadows-off tier
+
+    view.setBodyHidden(0, true); // cockpit — hide the whole car
+    expect(blob.visible).toBe(false); // its ground decal goes too
+    view.setBlobShadows(true); // ladder still says "blobs on"…
+    expect(blob.visible).toBe(false); // …but a hidden car stays fully dark
+
+    view.setBodyHidden(0, false); // restore
+    view.setBlobShadows(true);
+    expect(blob.visible).toBe(true);
+    view.dispose();
+  });
+
   it('keeps the anchor LIVE while hidden — update() still writes the transform, so the follow camera does not freeze', () => {
     const scene = new Scene();
     const view = createCarsView(scene, track, ['p917']);
