@@ -50,6 +50,8 @@ export const TUNING = {
   marshalDuration: 0.9,
   /** Ground friction decelerating the tumbling car, in m/s². */
   tumbleFriction: 8,
+  /** Gravitational acceleration, in m/s² — powers banked-curve lateral assist and grade (elevation) longitudinal terms (M12). On a flat, unbanked track (bank 0, grade 0) every g-derived term vanishes exactly, so pre-M12 behavior is bit-identical. */
+  gravity: 9.81,
 };
 
 /** The shape every sim/input/ui module reads tuning through — same object, never cloned. */
