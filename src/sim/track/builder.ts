@@ -83,6 +83,9 @@ export function buildTrack(refs: readonly PieceRef[], opts: BuildTrackOptions = 
       if (ref.dir !== undefined) {
         throw new Error(`Piece ${ref.piece} is a straight; dir must not be specified`);
       }
+      if (ref.bank !== undefined) {
+        throw new Error(`Piece ${ref.piece} is a straight; bank must not be specified`);
+      }
       const entry = pose;
       pose = appendStraight(def.length, rise, pose, state);
       state.pieces.push({

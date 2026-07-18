@@ -32,7 +32,8 @@ export interface PieceRef {
   dir?: 'left' | 'right';
   /**
    * M12 banking: surface bank magnitude in radians (always ≥ 0; applied banking
-   * INTO the turn, sign derived from `dir`). Curves only. Carried on the ref
+   * INTO the turn, sign derived from `dir`). Curves only — forbidden on a
+   * straight (enforced by buildTrack, same as `dir`). Carried on the ref
    * (per-use), not the PieceDef, because the same catalog curve — e.g.
    * curve9_90 — is used UNBANKED by the oval/figure-8 and banked only by the
    * Daytona Sweep; baking a bank into its def would tilt every use.

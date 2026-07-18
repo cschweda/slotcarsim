@@ -53,8 +53,9 @@ export const TRACKS = {
     // turn, and a back stretch that climbs over an elevated bridge and returns.
     // Plan-view it is a 48"-straight oval (both long straights 48" so it closes
     // in x/y exactly like the classic oval, just longer for a faster-feeling
-    // ~3.87 m lap); banking is a cross-section roll that leaves the centerline
-    // geometry untouched, and the bridge's rise nets to 0 around the loop.
+    // lap: centerline ≈3.87 m; lane 0 (inner) ≈3.75 m — banking is a
+    // cross-section roll that leaves the centerline geometry untouched, and
+    // the bridge's rise nets to 0 around the loop.
     //
     // Both ends turn the SAME way (left) — a real speedway — so the inner lane
     // (lane 0) is genuinely shorter/faster, an authentic inner-lane advantage

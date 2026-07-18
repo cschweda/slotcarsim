@@ -198,3 +198,36 @@ describe('buildTrack — dir validation', () => {
     expect(() => buildTrack(refs)).toThrow(/dir/);
   });
 });
+
+describe('buildTrack — bank validation (M12 review: bank is curve-only, mirroring the dir guard)', () => {
+  it('throws when a straight piece specifies bank', () => {
+    const refs: PieceRef[] = [{ piece: 'straight15', bank: 0.5236 }];
+    expect(() => buildTrack(refs)).toThrow(/bank/);
+  });
+
+  it('a straight with rise but no bank is still valid (rise is legitimate on both kinds)', () => {
+    // A full closing loop (not just a piece that would fail on an unrelated
+    // closure error) — the same net-zero-rise oval as the closure tests
+    // above — asserting NO throw at all, not merely "no bank-shaped throw".
+    const refs: PieceRef[] = [
+      { piece: 'straight15', rise: 0.02 },
+      { piece: 'straight15' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'straight15', rise: -0.02 },
+      { piece: 'straight15' },
+      { piece: 'curve9_90', dir: 'left' },
+      { piece: 'curve9_90', dir: 'left' },
+    ];
+    expect(() => buildTrack(refs)).not.toThrow();
+  });
+
+  it('a banked curve (bank + dir, no rise) is still valid', () => {
+    const refs: PieceRef[] = Array.from({ length: 4 }, () => ({
+      piece: 'curve9_90' as const,
+      dir: 'left' as const,
+      bank: 0.5236,
+    }));
+    expect(() => buildTrack(refs)).not.toThrow();
+  });
+});
