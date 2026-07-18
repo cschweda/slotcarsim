@@ -115,6 +115,7 @@ const CONTROLS_ITEMS: ReadonlyArray<readonly [label: string, value: string]> = [
   ['SOUND', 'M or the Sound button'],
   ['CAMERA', 'wheel to zoom · drag to move the view'],
   ['STICKINESS (Practice)', '[ / ] to adjust'],
+  ['R — instant replay', 'last ~3s at half speed · R again or Esc to end early'],
   ['MENU / ABORT', 'Esc or the MENU button'],
   ['MENUS', '↑↓ choose · ←→ change · Enter select'],
   ['GAMEPAD', 'trigger = throttle (auto-detected) · left stick = pan · right stick = zoom'],
@@ -309,7 +310,8 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
 
     const controlsHint = document.createElement('div');
     controlsHint.className = 'm7-menu__hint';
-    controlsHint.textContent = 'Space/↑ = throttle · M = sound · Esc/MENU = abort · [ ] = stickiness (Practice)';
+    controlsHint.textContent =
+      'Space/↑ = throttle · M = sound · R = instant replay · Esc/MENU = abort · [ ] = stickiness (Practice)';
     panel.appendChild(controlsHint);
 
     let selected = 0;

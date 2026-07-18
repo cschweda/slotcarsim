@@ -14,6 +14,8 @@ import type { RaceConfig, RaceMachine, TrackId } from './game/race';
 import { AI_CAR_INDEX, PLAYER_CAR_INDEX, createRace, raceHasAiCar } from './game/race';
 import type { Coach } from './game/coach';
 import { createCoach } from './game/coach';
+import type { ReplayBuffer, ReplayFrame, ReplayPlayback } from './game/replay';
+import { DEFAULT_REPLAY_SPEED, createReplayBuffer, createReplayPlayback } from './game/replay';
 import { readGamepadCameraInput, rumbleOnDeslot, rumbleOnReslot } from './input/gamepad';
 import { createInputManager } from './input/inputManager';
 import { DEFAULT_DT, createLoop } from './loop';
@@ -42,8 +44,22 @@ import type { CoachWidget } from './ui/coach';
 import { createDebugPanel } from './ui/debugPanel';
 import { createHud } from './ui/hud';
 import { createMenuSystem, createStartGate } from './ui/menus';
-import type { CalibrationOverlay, CountdownOverlay, MenuButton, SoundToggle } from './ui/overlays';
-import { createCalibrationOverlay, createCountdownOverlay, createMenuButton, createSoundToggle } from './ui/overlays';
+import type {
+  CalibrationOverlay,
+  CountdownOverlay,
+  MenuButton,
+  ReplayBanner,
+  ReplayButton,
+  SoundToggle,
+} from './ui/overlays';
+import {
+  createCalibrationOverlay,
+  createCountdownOverlay,
+  createMenuButton,
+  createReplayBanner,
+  createReplayButton,
+  createSoundToggle,
+} from './ui/overlays';
 import { loadSoundPref, saveSoundPref } from './ui/soundPref';
 import { createStatsBar } from './ui/statsBar';
 import type { StatsBar, StatsBarMeasurement } from './ui/statsBar';
@@ -145,9 +161,13 @@ let calibrationOverlay: CalibrationOverlay | undefined;
 let soundToggle: SoundToggle | undefined;
 /** M10: persistent top-right MENU button, stacked below the sound toggle — created alongside it; visible only during countdown/racing (see frame()). */
 let menuButton: MenuButton | undefined;
-/** M10: persistent throttle-coach HUD widget — created once; visible only for a session with RaceConfig.coach on (see buildSession()). */
+/** M11b: persistent top-right REPLAY button, stacked below MENU — created alongside it; visible whenever a replay could start or one is already playing (see frame()). */
+let replayButton: ReplayButton | undefined;
+/** M11b: persistent top-center "REPLAY" banner + progress bar — created once (doesn't need the audio-unlock gesture, unlike the buttons above), shown only while a replay is actually playing. */
+let replayBanner: ReplayBanner | undefined;
+/** M10: persistent throttle-coach HUD widget — created once; visible only for a session with RaceConfig.coach on (see buildSession()), and hidden for the duration of a replay regardless (see frame()). */
 let coachWidget: CoachWidget | undefined;
-/** M11: persistent top-center stats bar — created once; visible only during countdown/racing (see frame()). */
+/** M11: persistent top-center stats bar — created once; visible only during countdown/racing (see frame()); its update() is skipped (not hidden) during a replay, so it reads as frozen. */
 let statsBar: StatsBar | undefined;
 /** Rolling frame-time monitor that steps DPR/shadow quality down under sustained load and back up under sustained headroom (never above ?quality). */
 let qualityLadder: ReturnType<typeof createQualityLadder> | undefined;
@@ -158,6 +178,36 @@ let aiCrashes = 0;
 let fpsEma = 60;
 /** M11: smoothing factor for fpsEma's per-frame exponential update — small enough to stay readable, responsive enough to reflect a real quality-tier step within a second or so. */
 const FPS_SMOOTHING = 0.1;
+
+// ---- M11b: instant replay -------------------------------------------------
+// Freeze-world replay of the last few seconds: the sim (and race machine,
+// and player input) simply stop being fed ticks for the duration — the rAF
+// render loop keeps running, driven instead by a captured window of
+// previously-recorded ticks — so lap timing/tick count are unaffected BY
+// CONSTRUCTION once live stepping resumes (zero ticks were ever lost; the
+// sim just wasn't asked to advance). Camera (zoom/pan, wheel/drag/gamepad
+// stick) is untouched by any of this — see frame()'s own docs on why that
+// wiring lives outside every `inReplay` branch below.
+
+/** How much history the ring buffer holds, independent of how much any one replay actually plays back (see REPLAY_WINDOW_SEC) — a little slack beyond the window so a slightly-late R press still catches the whole moment. */
+const REPLAY_CAPACITY_SEC = 6;
+/** How much of the buffer's most recent history a triggered replay actually plays — long enough to show the run-up to a mistake, not just its aftermath (a 2.0s tumble: 1.1s tumbling + 0.9s marshal wait, per config/tuning.ts, plus 1s of pre-roll). */
+const REPLAY_WINDOW_SEC = 3;
+/** R/the REPLAY button are ignored until the buffer holds at least this much — a fraction-of-a-second buffer would "replay" almost nothing. */
+const REPLAY_MIN_SEC = 0.5;
+/** Wall-clock hold once natural playback completes before live sim stepping resumes — long enough to read as a deliberate pause, not a jump-cut. */
+const REPLAY_HOLD_SEC = 0.4;
+
+/** Every racing tick's states (+ that tick's player throttle) — recorded from the loop's own step callback (see init()), cleared on every session rebuild (see buildSession()). */
+let replayBuffer: ReplayBuffer = createReplayBuffer(REPLAY_CAPACITY_SEC, DEFAULT_DT);
+
+/** A currently-playing replay: the captured window it's playing back, the playback cursor driving it, and how long it's been holding since natural completion (see REPLAY_HOLD_SEC) — undefined whenever no replay is active, which frame() treats as "step/render the live sim as normal". */
+interface ActiveReplay {
+  frames: ReplayFrame[];
+  playback: ReplayPlayback;
+  holdElapsedSec: number;
+}
+let activeReplay: ActiveReplay | undefined;
 
 // Audio: created only inside the start gate's real user-gesture handler.
 let engine: AudioEngine | undefined;
@@ -295,6 +345,8 @@ function buildSession(config: RaceConfig): void {
   resultsShown = false;
   playerCrashes = 0;
   aiCrashes = 0;
+  exitReplay(); // a rebuilt session's sim/race are brand new — any replay of the PREVIOUS one no longer means anything.
+  replayBuffer.clear();
   reframeCamera(bbox);
 }
 
@@ -351,9 +403,53 @@ function abortToMenu(): void {
   if (!session) return;
   const phase = session.race.phase();
   if (phase !== 'countdown' && phase !== 'racing') return;
+  exitReplay(); // the MENU button (unlike Esc — see init()'s keydown handler) isn't itself gated on replay state, so abandoning the race must also clean up any replay left showing.
   session.race.abort();
   countdown?.hide();
   openMenu();
+}
+
+// ---- Instant replay --------------------------------------------------------
+
+/**
+ * Whether R/the REPLAY button could actually start a replay right now: a
+ * live race actually racing (not countdown/menu/gate), with the buffer past
+ * REPLAY_MIN_SEC. Shared by enterReplay()'s own guard and frame()'s button-
+ * visibility check, so the two can never quietly drift out of sync.
+ */
+function replayIsEligible(): boolean {
+  return !!session && session.race.phase() === 'racing' && replayBuffer.size() * DEFAULT_DT >= REPLAY_MIN_SEC;
+}
+
+/**
+ * Begins playing back the last REPLAY_WINDOW_SEC of recorded ticks. Silently
+ * ignored (per the brief) unless replayIsEligible() and one isn't already
+ * active — so a stray R press at the menu, during countdown, or moments
+ * after a fresh session rebuild simply does nothing.
+ */
+function enterReplay(): void {
+  if (activeReplay || !replayIsEligible()) return;
+  const frames = replayBuffer.window(REPLAY_WINDOW_SEC);
+  if (frames.length < 2) return; // nothing to interpolate between
+  activeReplay = {
+    frames,
+    playback: createReplayPlayback(frames, { speed: DEFAULT_REPLAY_SPEED, dt: DEFAULT_DT }),
+    holdElapsedSec: 0,
+  };
+  replayBanner?.set(true, 0);
+}
+
+/** Ends the current replay — early exit (R/Esc/REPLAY button) or the post-completion hold expiring (see frame()) — and resumes live sim stepping from exactly where it froze. A no-op if none is active. */
+function exitReplay(): void {
+  if (!activeReplay) return;
+  activeReplay = undefined;
+  replayBanner?.set(false, 0);
+}
+
+/** The ONE path both the 'R' key and the REPLAY button's click funnel through — enters a replay if none is active, ends the current one early otherwise — so the two can never disagree about what a press/click does. */
+function toggleReplay(): void {
+  if (activeReplay) exitReplay();
+  else enterReplay();
 }
 
 // ---- Camera framing ------------------------------------------------------
@@ -603,6 +699,7 @@ function frame(timestamp: number): void {
 
     const phase = session.race.phase();
     const liveSession = phase === 'countdown' || phase === 'racing';
+    const inReplay = activeReplay !== undefined;
 
     // M11: gamepad camera sticks — standard-mapping pads only (see
     // input/gamepad.ts's readGamepadCameraInput), left stick pans, right
@@ -612,7 +709,9 @@ function frame(timestamp: number): void {
     // camera behind a modal that already covers the whole canvas would just
     // be pointless). Composes with wheel zoom / click-drag pan for free —
     // it's folded into the exact same zoomTarget/panTarget this frame's
-    // easing above already reads.
+    // easing above already reads. M11b: deliberately UNGATED by `inReplay` —
+    // the camera (this, plus the wheel/drag listeners in init()) stays FULLY
+    // LIVE during a replay; that's the feature's entire point.
     if (liveSession) {
       const stick = readGamepadCameraInput();
       if (stick) {
@@ -625,45 +724,86 @@ function frame(timestamp: number): void {
     // race is actually live — the menu/results screens already have their
     // own way back.
     menuButton?.setVisible(liveSession);
+    // M11b: the REPLAY button is visible whenever it could start a replay
+    // OR one is already playing — the SAME button both starts and (via
+    // toggleReplay) ends one early, so it must stay visible/clickable
+    // throughout, not just at the moment it became eligible.
+    replayButton?.setVisible(liveSession && (inReplay || replayIsEligible()));
 
-    // Outside a race (menu, countdown), poll the gamepad directly (never the
-    // keyboard, whose read() would otherwise ramp up its throttle while a
-    // key is merely being held at the menu) so connection detection and the
-    // calibration wizard can progress before the player ever starts racing —
-    // gamepads are invisible until a button press, and the wizard is meant
-    // to greet a new controller right away, not wait for a race to begin.
-    if (phase === 'racing' && inputManager) {
-      pendingInput = { throttle: inputManager.readPlayerThrottle(dtFrame) };
+    let renderPrevStates: readonly CarState[];
+    let renderCurrStates: readonly CarState[];
+    let renderAlpha: number;
+    let voiceThrottle: number;
+
+    if (inReplay) {
+      // M11b: sim/race/input below are entirely untouched while a replay
+      // plays — loop.advance() (hence sim.step()) is simply never called, so
+      // live ticks resume from EXACTLY where they froze once the replay
+      // ends: zero ticks lost, lap timing unaffected by construction.
+      const active = activeReplay!;
+      const cursor = active.playback.advance(dtFrame);
+      const frame0 = active.frames[cursor.index]!;
+      const frame1 = active.frames[cursor.nextIndex]!;
+      renderPrevStates = frame0.states;
+      renderCurrStates = frame1.states;
+      renderAlpha = cursor.alpha;
+      voiceThrottle = frame1.playerThrottle;
+      replayBanner?.set(true, cursor.progress);
+
+      if (active.playback.done) {
+        active.holdElapsedSec += dtFrame;
+        if (active.holdElapsedSec >= REPLAY_HOLD_SEC) exitReplay();
+      }
     } else {
-      inputManager?.pollGamepad(dtFrame);
-      pendingInput = { throttle: 0 };
+      // Outside a race (menu, countdown), poll the gamepad directly (never the
+      // keyboard, whose read() would otherwise ramp up its throttle while a
+      // key is merely being held at the menu) so connection detection and the
+      // calibration wizard can progress before the player ever starts racing —
+      // gamepads are invisible until a button press, and the wizard is meant
+      // to greet a new controller right away, not wait for a race to begin.
+      if (phase === 'racing' && inputManager) {
+        pendingInput = { throttle: inputManager.readPlayerThrottle(dtFrame) };
+      } else {
+        inputManager?.pollGamepad(dtFrame);
+        pendingInput = { throttle: 0 };
+      }
+      frameEvents = [];
+      frameBeeps = [];
+
+      renderAlpha = loop.advance(dtFrame);
+
+      for (const beep of frameBeeps) sfx?.countdownBeep(beep.final);
+      handleAudioEvents(frameEvents);
+      handleRumbleEvents(frameEvents);
+      handleCrashEvents(frameEvents);
+
+      // Race finished this frame → show results once (session stays on the table).
+      if (session.race.phase() === 'finished' && !resultsShown) {
+        resultsShown = true;
+        showResults();
+      }
+
+      renderPrevStates = session.sim.prevCarStates();
+      renderCurrStates = session.sim.carStates();
+      voiceThrottle = pendingInput.throttle;
+      replayBanner?.set(false, 0);
     }
-    frameEvents = [];
-    frameBeeps = [];
 
-    const alpha = loop.advance(dtFrame);
-
-    for (const beep of frameBeeps) sfx?.countdownBeep(beep.final);
-    handleAudioEvents(frameEvents);
-    handleRumbleEvents(frameEvents);
-    handleCrashEvents(frameEvents);
-
-    // Race finished this frame → show results once (session stays on the table).
-    if (session.race.phase() === 'finished' && !resultsShown) {
-      resultsShown = true;
-      showResults();
-    }
-
+    // HUD/coach/stats-bar/debug-panel below always read the LIVE sim
+    // directly (never substituted with replay frames): mid-replay that's
+    // simply whatever it was the instant the sim froze — exactly the
+    // "freeze" the brief calls for, for free, with no special-casing needed.
     const currentSim = session.sim;
     const prevStates = currentSim.prevCarStates();
     const currStates = currentSim.carStates();
-    const carPoses = currStates.map((curr, i) =>
-      computeCarPose(prevStates[i]!, curr, alpha, currentSim.laneFor(i)),
+
+    const carPoses = renderCurrStates.map((curr, i) =>
+      computeCarPose(renderPrevStates[i]!, curr, renderAlpha, currentSim.laneFor(i)),
     );
 
     if (session.carsView) {
       session.carsView.update(
-        currStates.map((curr, i) => computeCarRenderPose(prevStates[i]!, curr, alpha, currentSim.laneFor(i))),
+        renderCurrStates.map((curr, i) => computeCarRenderPose(renderPrevStates[i]!, curr, renderAlpha, currentSim.laneFor(i))),
       );
       session.carsView.setBlobShadows(qualityLadder?.blobShadowsActive() ?? false);
     } else if (session.debugView) {
@@ -680,14 +820,18 @@ function frame(timestamp: number): void {
     // τ=0.03 setTargetAtTime glide fade them out naturally. This re-reads
     // phase() fresh (rather than reusing this frame's `phase` local, read
     // before loop.advance() above) so a race that finishes mid-frame goes
-    // silent that same frame instead of one frame late.
+    // silent that same frame instead of one frame late. M11b: `racing` still
+    // reads true throughout a replay (the race machine's own phase never
+    // changes — see above), so voices keep sounding, driven from the
+    // replayed frames' own v/throttle (`renderCurrStates`/`voiceThrottle`)
+    // instead of the live sim's — a replayed tumble is heard, not just seen.
     const racing = session.race.phase() === 'racing';
-    currStates.forEach((state, i) => {
+    renderCurrStates.forEach((state, i) => {
       const voice = session!.motorVoices[i];
       const config = session!.carConfigs[i];
       const pose = carPoses[i];
       if (!voice || !config || !pose) return;
-      const throttleForVoice = config.controlled === 'input' ? pendingInput.throttle : state.v / TUNING.vmax;
+      const throttleForVoice = config.controlled === 'input' ? voiceThrottle : state.v / TUNING.vmax;
       voice.update({
         v: racing ? state.v : 0,
         throttle: racing ? throttleForVoice : 0,
@@ -709,12 +853,16 @@ function frame(timestamp: number): void {
 
     // M10: throttle coach — fed the player's own INTERPOLATED (s, v), same
     // smoothing as the render pose, so the gauge doesn't step at 120Hz.
-    if (session.coach && coachWidget) {
+    // M11b: hidden and not updated during a replay — it reads the live sim,
+    // which is frozen, and "coaching" a moment that already happened would
+    // be nonsensical.
+    coachWidget?.setVisible(!!session.coach && !inReplay);
+    if (!inReplay && session.coach && coachWidget) {
       const playerLane = currentSim.laneFor(PLAYER_CAR_INDEX);
       const playerPrev = prevStates[PLAYER_CAR_INDEX]!;
       const playerCurr = currStates[PLAYER_CAR_INDEX]!;
-      const s = wrapLerp(playerPrev.s, playerCurr.s, alpha, playerLane.totalLength);
-      const v = lerp(playerPrev.v, playerCurr.v, alpha);
+      const s = wrapLerp(playerPrev.s, playerCurr.s, renderAlpha, playerLane.totalLength);
+      const v = lerp(playerPrev.v, playerCurr.v, renderAlpha);
       coachWidget.update(session.coach.advise({ s, v }, dtFrame));
     }
 
@@ -747,17 +895,21 @@ function frame(timestamp: number): void {
     // M11: top-center stats bar — speed updates every frame, counters track
     // this session's own tallies (laps from the race machine, crashes from
     // handleCrashEvents above), visible only during countdown/racing (any
-    // mode) same as the on-screen MENU button.
+    // mode) same as the on-screen MENU button. M11b: update() is SKIPPED
+    // (not hidden — `setVisible` still runs) during a replay, so it just
+    // reads as frozen at whatever it last showed, per the brief.
     if (statsBar) {
-      const playerState = currStates[PLAYER_CAR_INDEX];
-      const hasAi = raceHasAiCar(session.config);
-      statsBar.update({
-        speedMs: playerState ? playerState.v : 0,
-        laps: session.race.laps(PLAYER_CAR_INDEX),
-        crashes: playerCrashes,
-        aiCrashes: hasAi ? aiCrashes : undefined,
-        fps: fpsEma,
-      });
+      if (!inReplay) {
+        const playerState = currStates[PLAYER_CAR_INDEX];
+        const hasAi = raceHasAiCar(session.config);
+        statsBar.update({
+          speedMs: playerState ? playerState.v : 0,
+          laps: session.race.laps(PLAYER_CAR_INDEX),
+          crashes: playerCrashes,
+          aiCrashes: hasAi ? aiCrashes : undefined,
+          fps: fpsEma,
+        });
+      }
       statsBar.setVisible(liveSession);
     }
 
@@ -888,6 +1040,7 @@ function init(): void {
     menu = createMenuSystem(canvasHost);
     countdown = createCountdownOverlay(canvasHost);
     calibrationOverlay = createCalibrationOverlay(canvasHost);
+    replayBanner = createReplayBanner(canvasHost);
     qualityLadder = createQualityLadder(sceneHandle, quality);
 
     // Fix round 1: the stats bar's left/right reserve depends on the real
@@ -940,6 +1093,7 @@ function init(): void {
       applyMuted(); // silence the fresh (always-unmuted-by-construction) engine if the loaded/default preference is off
       soundToggle = createSoundToggle(canvasHost, { initialOn: !muted, onToggle: toggleSound });
       menuButton = createMenuButton(canvasHost, abortToMenu);
+      replayButton = createReplayButton(canvasHost, toggleReplay);
       openMenu();
     });
   }
@@ -955,6 +1109,14 @@ function init(): void {
         const events = session.sim.step(dt, racingTick, [pendingInput]);
         for (const e of events) session.race.handleSimEvent(e);
         frameEvents.push(...events);
+        // M11b: recorded HERE (once per actual sim tick), not once per rAF
+        // frame in frame() — loop.advance() may run this callback 0, 1, or
+        // several times per frame depending on frame pacing, and the replay
+        // ring buffer's own dt (see createReplayBuffer's default) must track
+        // real sim ticks exactly, not render frames. pendingInput.throttle is
+        // this exact tick's player throttle — the same value just fed into
+        // sim.step() above.
+        replayBuffer.record(session.sim.carStates(), pendingInput.throttle);
       }
     },
   });
@@ -969,15 +1131,27 @@ function init(): void {
   });
 
   // Esc (or the on-screen MENU button, same abortToMenu() path) aborts back
-  // to the menu; 'M' toggles mute; '[' / ']' live-step stickiness — practice
-  // mode only, while actually racing (see the M10 brief).
+  // to the menu; 'M' toggles mute; 'R' (or the REPLAY button) toggles
+  // instant replay; '[' / ']' live-step stickiness — practice mode only,
+  // while actually racing (see the M10 brief).
   window.addEventListener('keydown', (event) => {
     if (event.code === 'Escape') {
+      // M11b: Esc during a replay ends ONLY the replay — it must NOT also
+      // abort the race underneath it. Checked first, before abortToMenu(),
+      // so the two can never both fire off one keypress.
+      if (activeReplay) {
+        exitReplay();
+        return;
+      }
       abortToMenu();
       return;
     }
     if (event.code === 'KeyM' && engine) {
       toggleSound();
+      return;
+    }
+    if (event.code === 'KeyR') {
+      toggleReplay();
       return;
     }
     if (event.code === 'BracketLeft' || event.code === 'BracketRight') {

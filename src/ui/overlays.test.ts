@@ -16,7 +16,13 @@ import { TUNING } from '../config/tuning';
 import { createDebugPanel } from './debugPanel';
 import { createHud } from './hud';
 import { createMenuSystem, createStartGate } from './menus';
-import { createCalibrationOverlay, createCountdownOverlay, createSoundToggle } from './overlays';
+import {
+  createCalibrationOverlay,
+  createCountdownOverlay,
+  createReplayBanner,
+  createReplayButton,
+  createSoundToggle,
+} from './overlays';
 
 describe('createCountdownOverlay', () => {
   it('mounts hidden into the host and exposes set/hide', () => {
@@ -124,6 +130,72 @@ describe('createSoundToggle', () => {
     expect(() => createSoundToggle(hostA, { initialOn: false, onToggle: () => {} })).not.toThrow();
     expect(() => createSoundToggle(hostB, { initialOn: false, onToggle: () => {} })).not.toThrow();
     expect(document.querySelectorAll('#m9-sound-toggle-style').length).toBe(1);
+  });
+});
+
+describe('createReplayButton', () => {
+  it('starts hidden, becomes visible via setVisible(), and calls onClick on click', () => {
+    const host = document.createElement('div');
+    let clicks = 0;
+    const button = createReplayButton(host, () => {
+      clicks += 1;
+    });
+
+    const el = host.querySelector('button') as HTMLButtonElement | null;
+    expect(el).not.toBeNull();
+    expect(el!.classList.contains('m11b-replay-button--visible')).toBe(false);
+    expect(el!.getAttribute('aria-label')).toBeTruthy();
+
+    button.setVisible(true);
+    expect(el!.classList.contains('m11b-replay-button--visible')).toBe(true);
+
+    el!.click();
+    expect(clicks).toBe(1);
+
+    button.setVisible(false);
+    expect(el!.classList.contains('m11b-replay-button--visible')).toBe(false);
+  });
+
+  it('repeated construction reuses the shared stylesheet without throwing', () => {
+    const hostA = document.createElement('div');
+    const hostB = document.createElement('div');
+    expect(() => createReplayButton(hostA, () => {})).not.toThrow();
+    expect(() => createReplayButton(hostB, () => {})).not.toThrow();
+    expect(document.querySelectorAll('#m11b-replay-button-style').length).toBe(1);
+  });
+});
+
+describe('createReplayBanner', () => {
+  it('mounts hidden, shows on set(true, progress) with a clamped progress-bar fill, hides on set(false, _)', () => {
+    const host = document.createElement('div');
+    const banner = createReplayBanner(host);
+
+    const el = host.querySelector('.m11b-replay-banner') as HTMLElement | null;
+    expect(el).not.toBeNull();
+    expect(el!.classList.contains('m11b-replay-banner--visible')).toBe(false);
+
+    const fill = el!.querySelector('.m11b-replay-banner__fill') as HTMLElement;
+
+    banner.set(true, 0.42);
+    expect(el!.classList.contains('m11b-replay-banner--visible')).toBe(true);
+    expect(fill.style.width).toBe('42%');
+
+    banner.set(true, 1.6); // clamps at 100%, never overshoots
+    expect(fill.style.width).toBe('100%');
+
+    banner.set(true, -0.3); // clamps at 0%, never goes negative
+    expect(fill.style.width).toBe('0%');
+
+    banner.set(false, 0.9);
+    expect(el!.classList.contains('m11b-replay-banner--visible')).toBe(false);
+  });
+
+  it('repeated construction reuses the shared stylesheet without throwing', () => {
+    const hostA = document.createElement('div');
+    const hostB = document.createElement('div');
+    expect(() => createReplayBanner(hostA)).not.toThrow();
+    expect(() => createReplayBanner(hostB)).not.toThrow();
+    expect(document.querySelectorAll('#m11b-replay-banner-style').length).toBe(1);
   });
 });
 

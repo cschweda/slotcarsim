@@ -325,3 +325,157 @@ export function createCalibrationOverlay(host: HTMLElement): CalibrationOverlay 
 
   return { set };
 }
+
+// ---- M11b: instant replay button + banner ---------------------------------
+// A discoverable, clickable way to trigger/end instant replay — stacked
+// directly below the MENU button (same top-right corner, same matched-pair
+// visual style as SOUND/MENU), and a small top-center banner shown only
+// while a replay is actually playing.
+
+const REPLAY_BUTTON_STYLE_ID = 'm11b-replay-button-style';
+
+function ensureReplayButtonStyles(): void {
+  if (document.getElementById(REPLAY_BUTTON_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = REPLAY_BUTTON_STYLE_ID;
+  style.textContent = `
+    .m11b-replay-button {
+      position: fixed;
+      top: 96px;
+      right: 12px;
+      z-index: 110;
+      display: none;
+      font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: #e8e8e8;
+      background: rgba(10, 10, 12, 0.72);
+      border: 1px solid rgba(255, 180, 84, 0.22);
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .m11b-replay-button:hover {
+      border-color: rgba(255, 180, 84, 0.5);
+    }
+    .m11b-replay-button--visible {
+      display: block;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+export interface ReplayButton {
+  /** Visible whenever a live session could start a replay (its buffer has enough recorded ticks) OR one is already playing (so the SAME button always offers a way to end it early — main.ts funnels both directions through one toggle function, same pattern as the MENU button's abortToMenu()). */
+  setVisible(visible: boolean): void;
+}
+
+/**
+ * Persistent top-right "REPLAY" button, stacked below MENU. Its click always
+ * runs main.ts's one toggleReplay() path — entering a replay if none is
+ * active, ending the current one early otherwise — so this button and the
+ * `R` key can never disagree about what a click/press does.
+ */
+export function createReplayButton(host: HTMLElement, onClick: () => void): ReplayButton {
+  ensureReplayButtonStyles();
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'm11b-replay-button';
+  button.textContent = '⟲ REPLAY';
+  button.setAttribute('aria-label', 'Replay the last few seconds — press again, or Esc, to end early');
+  host.appendChild(button);
+  button.addEventListener('click', onClick);
+
+  function setVisible(visible: boolean): void {
+    button.classList.toggle('m11b-replay-button--visible', visible);
+  }
+
+  return { setVisible };
+}
+
+const REPLAY_BANNER_STYLE_ID = 'm11b-replay-banner-style';
+
+function ensureReplayBannerStyles(): void {
+  if (document.getElementById(REPLAY_BANNER_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = REPLAY_BANNER_STYLE_ID;
+  style.textContent = `
+    .m11b-replay-banner {
+      position: fixed;
+      top: 54px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 45;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      pointer-events: none;
+      user-select: none;
+    }
+    .m11b-replay-banner--visible {
+      display: flex;
+    }
+    .m11b-replay-banner__label {
+      font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: #ffb454;
+      text-shadow: 0 4px 14px rgba(0, 0, 0, 0.8);
+      background: rgba(10, 10, 12, 0.72);
+      border: 1px solid rgba(255, 180, 84, 0.35);
+      border-radius: 6px;
+      padding: 4px 14px;
+    }
+    .m11b-replay-banner__track {
+      width: 160px;
+      height: 3px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.16);
+      overflow: hidden;
+    }
+    .m11b-replay-banner__fill {
+      height: 100%;
+      width: 0%;
+      background: #ffb454;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+export interface ReplayBanner {
+  /** Shows/hides the "REPLAY" banner; while `active`, `progress` (0..1, clamped) fills the thin bar under the label — how far through the captured window playback has reached (game/replay.ts's PlaybackCursor.progress). */
+  set(active: boolean, progress: number): void;
+}
+
+export function createReplayBanner(host: HTMLElement): ReplayBanner {
+  ensureReplayBannerStyles();
+
+  const el = document.createElement('div');
+  el.className = 'm11b-replay-banner';
+  const label = document.createElement('div');
+  label.className = 'm11b-replay-banner__label';
+  label.textContent = 'REPLAY';
+  const track = document.createElement('div');
+  track.className = 'm11b-replay-banner__track';
+  const fill = document.createElement('div');
+  fill.className = 'm11b-replay-banner__fill';
+  track.appendChild(fill);
+  el.append(label, track);
+  host.appendChild(el);
+
+  function set(active: boolean, progress: number): void {
+    el.classList.toggle('m11b-replay-banner--visible', active);
+    if (active) {
+      const pct = Math.round(Math.min(1, Math.max(0, progress)) * 100);
+      fill.style.width = `${pct}%`;
+    }
+  }
+
+  return { set };
+}
