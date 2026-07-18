@@ -54,3 +54,64 @@ export const TUNING = {
 
 /** The shape every sim/input/ui module reads tuning through — same object, never cloned. */
 export type Tuning = typeof TUNING;
+
+// ---- M10: Stickiness (beginner grip assist) ------------------------------
+// A menu-selectable multiplier on TUNING's own gripSoft/gripHard, from
+// authentic (1.0×, unchanged) up through a Magna-Traction-like level and a
+// deliberately overpowered "Training Glue" level for absolute beginners.
+// Captured HERE, once, at module load — decoupled from whatever gripSoft/
+// gripHard currently read (which the dev ?tune panel can also drag around) —
+// so applying a stickiness level is idempotent: it always re-derives from the
+// same fixed 8/11 base, never compounds on a previously-applied level.
+const BASE_GRIP_SOFT = TUNING.gripSoft;
+const BASE_GRIP_HARD = TUNING.gripHard;
+
+export const STICKINESS_LEVELS = [
+  { id: 'authentic', label: 'Authentic AFX', mult: 1.0 },
+  { id: 'sticky', label: 'Sticky', mult: 1.5 },
+  { id: 'magna', label: 'Magna-Traction', mult: 2.1 },
+  { id: 'glue', label: 'Training Glue', mult: 2.7 },
+] as const;
+
+export type StickinessLevel = (typeof STICKINESS_LEVELS)[number];
+export type StickinessId = StickinessLevel['id'];
+
+/** Index of a stickiness id in STICKINESS_LEVELS (0 = authentic); falls back to 0 for an unrecognized id. */
+export function stickinessIndex(id: StickinessId): number {
+  const i = STICKINESS_LEVELS.findIndex((level) => level.id === id);
+  return i === -1 ? 0 : i;
+}
+
+/** gripSoft/gripHard for a stickiness level: the fixed BASE_GRIP_* values times the level's multiplier — the "mapping math" (base 8/11; e.g. magna ≈ 16.8/23.1, matching the documented Magna-Traction reference ~17/24). */
+export function stickinessGrip(id: StickinessId): { gripSoft: number; gripHard: number } {
+  const level = STICKINESS_LEVELS[stickinessIndex(id)]!;
+  return { gripSoft: BASE_GRIP_SOFT * level.mult, gripHard: BASE_GRIP_HARD * level.mult };
+}
+
+/**
+ * Applies a stickiness level to `cfg` by MUTATING its gripSoft/gripHard in
+ * place — the same live-mutation mechanism the dev ?tune panel already uses
+ * (src/ui/debugPanel.ts): every sim step re-reads cfg fresh, so this takes
+ * effect on the very next tick, no matter whether `cfg` is the shared TUNING
+ * singleton or a session-local copy. Called once at session build time and
+ * again on every practice-mode live [ ]/[ ] step.
+ */
+export function applyStickiness(cfg: Tuning, id: StickinessId): void {
+  const { gripSoft, gripHard } = stickinessGrip(id);
+  cfg.gripSoft = gripSoft;
+  cfg.gripHard = gripHard;
+}
+
+/**
+ * Steps to the next (dir=1, `]`) or previous (dir=-1, `[`) stickiness level,
+ * CLAMPED at both ends (never wraps) — a live in-race adjustment shouldn't
+ * suddenly jump from the most forgiving level back to the least (or vice
+ * versa) just because the player held the key one step too many while mid
+ * corner. (The menu's own ‹ › Stickiness row is a separate control and uses
+ * the menu's usual wrap-around cycling, like every other setup row.)
+ */
+export function stepStickiness(id: StickinessId, dir: 1 | -1): StickinessId {
+  const i = stickinessIndex(id);
+  const next = Math.min(STICKINESS_LEVELS.length - 1, Math.max(0, i + dir));
+  return STICKINESS_LEVELS[next]!.id;
+}
