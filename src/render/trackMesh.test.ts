@@ -6,7 +6,18 @@ import { PIECES } from '../sim/track/pieces';
 import type { PieceDef } from '../sim/track/pieces';
 import {
   CHORD_TOL,
+  GUARD_HEIGHT,
+  GUARD_THICK,
   HALF_WIDTH,
+  LANE_OFFSET,
+  MODULE_GAP,
+  MODULE_LEN,
+  RAIL_GAUGE,
+  RAIL_HALF,
+  RAIL_PROUD,
+  SEAM_HALF_LEN,
+  SLOT_DEPTH,
+  SLOT_HALF,
   arcSegmentCount,
   createTrackMesh,
   curveGeometrySegments,
@@ -106,6 +117,28 @@ describe('guardrailPieceLayout (module/gap sizing on the guardrail radius, not t
       expect(layout.radius).toBeCloseTo(piece.radius + HALF_WIDTH, 15);
       expect(layout.moduleCount).toBe(moduleCount);
     });
+  });
+});
+
+// Pins the cross-section literal dimensions to the AFX-derived design spec so
+// a future edit can't silently drift them (e.g. while refactoring nearby
+// code). Values are in meters; some constants store a half-dimension (the
+// centerline-symmetric ones), so their design "full" value is asserted via
+// *2 to match the spec as reviewed.
+describe('cross-section literal dimensions (regression pin)', () => {
+  it('pins every design constant to its spec value, in meters', () => {
+    expect(HALF_WIDTH).toBeCloseTo(0.0381, 15); // half the 3in molded piece width
+    expect(LANE_OFFSET).toBeCloseTo(0.01905, 15); // slot centers, +-, from centerline
+    expect(SLOT_HALF).toBeCloseTo(0.0015, 15); // slot half-width (3 mm slot)
+    expect(SLOT_DEPTH).toBeCloseTo(0.004, 15); // slot depth
+    expect(RAIL_GAUGE).toBeCloseTo(0.0055, 15); // rail center offset, +-, from slot center
+    expect(RAIL_HALF * 2).toBeCloseTo(0.0015, 15); // rail width (full)
+    expect(RAIL_PROUD).toBeCloseTo(0.0005, 15); // rail height above the roadbed
+    expect(SEAM_HALF_LEN * 2).toBeCloseTo(0.0008, 15); // seam width (full)
+    expect(GUARD_HEIGHT).toBeCloseTo(0.008, 15); // guardrail wall height
+    expect(GUARD_THICK).toBeCloseTo(0.002, 15); // guardrail wall thickness
+    expect(MODULE_LEN).toBeCloseTo(0.03, 15); // guardrail snap-on module length
+    expect(MODULE_GAP).toBeCloseTo(0.0015, 15); // guardrail inter-module gap
   });
 });
 

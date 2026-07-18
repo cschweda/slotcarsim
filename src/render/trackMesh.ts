@@ -29,26 +29,29 @@ import { PIECE_WIDTH } from '../sim/track/pieces';
 // the real mesh lands exactly under the car poses the sim drives.
 
 // ---- Cross-section dimensions (meters) ----
-// Exported: curveGeometrySegments/guardrailPieceLayout need it, and so does
-// trackMesh.test.ts (chord-error / guardrail-layout tests).
+// Exported (values unchanged) so tests can pin them to the design spec — see
+// the "cross-section literal dimensions" block in trackMesh.test.ts.
 export const HALF_WIDTH = PIECE_WIDTH / 2; // 0.0381
 const ROAD_TOP = 0.006; // roadbed top surface, 6 mm above the table (y=0)
 const CHAMFER = 0.002; // 45deg bevel on the two outer roadbed edges
-const LANE_OFFSET = TUNING.laneOffset; // 0.01905 — slot centers at +-this, matches the sim lanes
-const SLOT_HALF = 0.0015; // slot 3 mm wide
-const SLOT_FLOOR = ROAD_TOP - 0.004; // slot 4 mm deep -> floor at y=0.002
-const RAIL_GAUGE = 0.0055; // each rail center is +-this from its slot center
-const RAIL_HALF = 0.00075; // rail 1.5 mm wide
-const RAIL_TOP = ROAD_TOP + 0.0005; // rails stand 0.5 mm proud
+export const LANE_OFFSET = TUNING.laneOffset; // 0.01905 — slot centers at +-this, matches the sim lanes
+export const SLOT_HALF = 0.0015; // slot 3 mm wide
+export const SLOT_DEPTH = 0.004; // slot depth -> floor at y = ROAD_TOP - SLOT_DEPTH = 0.002
+const SLOT_FLOOR = ROAD_TOP - SLOT_DEPTH;
+export const RAIL_GAUGE = 0.0055; // each rail center is +-this from its slot center
+export const RAIL_HALF = 0.00075; // rail 1.5 mm wide
+export const RAIL_PROUD = 0.0005; // rails stand this much proud of the roadbed
+const RAIL_TOP = ROAD_TOP + RAIL_PROUD;
 
-const SEAM_HALF_LEN = 0.0004; // seam strip 0.8 mm along the path
+export const SEAM_HALF_LEN = 0.0004; // seam strip 0.8 mm along the path
 const SEAM_PROUD = 0.0001; // 0.1 mm above the roadbed to avoid z-fighting
 
-const GUARD_TOP = ROAD_TOP + 0.008; // guardrail wall 8 mm tall
-const GUARD_THICK = 0.002; // 2 mm thick
+export const GUARD_HEIGHT = 0.008; // guardrail wall height above the roadbed
+const GUARD_TOP = ROAD_TOP + GUARD_HEIGHT;
+export const GUARD_THICK = 0.002; // 2 mm thick
 const GUARD_CHAMFER = 0.0005; // small rounded-top bevel
-const MODULE_LEN = 0.03; // ~30 mm snap-on segments...
-const MODULE_GAP = 0.0015; // ...with ~1.5 mm gaps between them
+export const MODULE_LEN = 0.03; // ~30 mm snap-on segments...
+export const MODULE_GAP = 0.0015; // ...with ~1.5 mm gaps between them
 
 const STRAIGHT_EPS = 1e-6; // |heading change| below this => a straight piece
 
