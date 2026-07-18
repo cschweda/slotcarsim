@@ -39,7 +39,24 @@ function ensureStyles(): void {
       margin-bottom: 6px;
     }
     .m6-gate__line { font-size: 15px; opacity: 0.92; }
-    .m6-gate__hint, .m7-menu__hint { font-size: 12px; opacity: 0.55; margin-top: 8px; }
+    .m6-gate__sound { font-size: 13px; opacity: 0.75; margin-top: 2px; }
+    .m6-gate__controls {
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 4px 14px;
+      justify-content: center;
+      font-size: 12px;
+      opacity: 0.7;
+      margin-top: 10px;
+    }
+    .m6-gate__controls-label {
+      text-align: right;
+      color: #9fd3ff;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .m6-gate__controls-value { text-align: left; }
+    .m7-menu__hint { font-size: 12px; opacity: 0.55; margin-top: 8px; }
     .m7-menu__panel {
       display: flex;
       flex-direction: column;
@@ -83,13 +100,27 @@ function ensureStyles(): void {
   document.head.appendChild(style);
 }
 
+/** The keyboard-controls block shown on the start gate for players without a gamepad — label/value pairs laid out as a compact two-column grid. */
+const CONTROLS_ITEMS: ReadonlyArray<readonly [label: string, value: string]> = [
+  ['THROTTLE', 'hold Space or ↑'],
+  ['SOUND', 'M or the Sound button'],
+  ['MENU / ABORT', 'Esc'],
+  ['MENUS', '↑↓ choose · ←→ change · Enter select'],
+  ['GAMEPAD', 'squeeze the right trigger (auto-detected)'],
+];
+
 /**
  * Mounts the start gate into `container` and calls `onStart()` exactly once,
  * synchronously inside the click/keydown handler that dismisses it — the one
  * valid place to unlock WebAudio (ctx.resume()). Consumes that event so the
  * key that starts the game isn't also read as a gameplay key.
+ *
+ * `soundOn` reflects the CURRENT persisted sound preference (main.ts reads
+ * it via soundPref.ts before ever calling this) purely so the gate's one
+ * line of copy stays truthful — this module has no localStorage dependency
+ * of its own.
  */
-export function createStartGate(container: HTMLElement, onStart: () => void): void {
+export function createStartGate(container: HTMLElement, soundOn: boolean, onStart: () => void): void {
   ensureStyles();
 
   const root = document.createElement('div');
@@ -106,11 +137,23 @@ export function createStartGate(container: HTMLElement, onStart: () => void): vo
   line.className = 'm6-gate__line';
   line.textContent = 'Click or press any key to start';
 
-  const hint = document.createElement('div');
-  hint.className = 'm6-gate__hint';
-  hint.textContent = 'Gamepad trigger = throttle · Space = throttle (keyboard)';
+  const soundLine = document.createElement('div');
+  soundLine.className = 'm6-gate__sound';
+  soundLine.textContent = soundOn ? 'Sound on' : 'Sound is off — press M or use the Sound button to enable';
 
-  root.append(title, line, hint);
+  const controls = document.createElement('div');
+  controls.className = 'm6-gate__controls';
+  for (const [label, value] of CONTROLS_ITEMS) {
+    const labelEl = document.createElement('span');
+    labelEl.className = 'm6-gate__controls-label';
+    labelEl.textContent = label;
+    const valueEl = document.createElement('span');
+    valueEl.className = 'm6-gate__controls-value';
+    valueEl.textContent = value;
+    controls.append(labelEl, valueEl);
+  }
+
+  root.append(title, line, soundLine, controls);
   container.appendChild(root);
 
   let dismissed = false;
@@ -227,6 +270,11 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
     hint.className = 'm7-menu__hint';
     hint.textContent = '↑↓ choose · ←→ change · Enter start';
     panel.appendChild(hint);
+
+    const controlsHint = document.createElement('div');
+    controlsHint.className = 'm7-menu__hint';
+    controlsHint.textContent = 'Space/↑ = throttle · M = sound · Esc = abort';
+    panel.appendChild(controlsHint);
 
     let selected = 0;
 

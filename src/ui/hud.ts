@@ -1,8 +1,10 @@
 // Vintage-scoreboard HUD overlay: a big lap counter with a subtle amber
 // accent, race position (P1/P2), last/best lap times (best flashes on
-// improvement), a throttle bar, the active input source, and a small muted
-// badge. M8 polish over the M2 functional-only layout — still minimal and
-// out of the way of the 3D view.
+// improvement), a throttle bar, and the active input source. M8 polish over
+// the M2 functional-only layout — still minimal and out of the way of the 3D
+// view. M9 removed the "MUTED" badge that used to live here: the persistent
+// top-right sound toggle button (ui/overlays.ts) now carries that state, so
+// this HUD doesn't duplicate it.
 const STYLE_ID = 'm2-hud-style';
 
 /** The established M8 amber accent. */
@@ -15,8 +17,6 @@ export interface HudUpdate {
   /** Player throttle, 0..1. */
   throttle: number;
   sourceLabel: string;
-  /** M6: true while the M-key dev/courtesy mute is active. */
-  muted: boolean;
   /** M7: laps to win — renders "LAP n / target" when set (a race). */
   lapTarget?: number;
   /** M7: the AI opponent's lap count, shown as a second line when set (a race). */
@@ -100,20 +100,6 @@ function ensureStyles(): void {
     .m2-hud__gamepad-hint--active {
       display: block;
     }
-    .m2-hud__muted-badge {
-      display: none;
-      margin-top: 4px;
-      font-size: 10px;
-      letter-spacing: 0.06em;
-      color: #ff8a80;
-      background: rgba(255, 138, 128, 0.14);
-      border: 1px solid rgba(255, 138, 128, 0.4);
-      border-radius: 3px;
-      padding: 1px 6px;
-    }
-    .m2-hud__muted-badge--active {
-      display: inline-block;
-    }
     .m2-hud__bar {
       width: 14px;
       background: rgba(10, 10, 12, 0.72);
@@ -168,11 +154,8 @@ export function createHud(container: HTMLElement): Hud {
   const gamepadHintLine = document.createElement('div');
   gamepadHintLine.className = 'm2-hud__gamepad-hint';
   gamepadHintLine.textContent = 'Squeeze the trigger to connect a gamepad';
-  const mutedBadge = document.createElement('div');
-  mutedBadge.className = 'm2-hud__muted-badge';
-  mutedBadge.textContent = 'MUTED';
 
-  panel.append(lapLine, timesLine, opponentLine, sourceLine, gamepadHintLine, mutedBadge);
+  panel.append(lapLine, timesLine, opponentLine, sourceLine, gamepadHintLine);
   root.appendChild(panel);
 
   const bar = document.createElement('div');
@@ -214,7 +197,6 @@ export function createHud(container: HTMLElement): Hud {
     }
     sourceLine.textContent = state.sourceLabel;
     gamepadHintLine.classList.toggle('m2-hud__gamepad-hint--active', state.showGamepadHint === true);
-    mutedBadge.classList.toggle('m2-hud__muted-badge--active', state.muted);
 
     const clamped = Math.min(1, Math.max(0, state.throttle));
     barFill.style.height = `${(clamped * 100).toFixed(1)}%`;

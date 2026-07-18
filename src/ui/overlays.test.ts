@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest';
 import { createHud } from './hud';
 import { createMenuSystem, createStartGate } from './menus';
-import { createCalibrationOverlay, createCountdownOverlay } from './overlays';
+import { createCalibrationOverlay, createCountdownOverlay, createSoundToggle } from './overlays';
 
 describe('createCountdownOverlay', () => {
   it('mounts hidden into the host and exposes set/hide', () => {
@@ -72,6 +72,58 @@ describe('createCalibrationOverlay', () => {
   });
 });
 
+describe('createSoundToggle', () => {
+  it('renders OFF by default, calls onToggle on click, and only relabels once the caller calls set() — the button never drives its own state', () => {
+    const host = document.createElement('div');
+    let toggled = 0;
+    const toggle = createSoundToggle(host, {
+      initialOn: false,
+      onToggle: () => {
+        toggled += 1;
+      },
+    });
+
+    const button = host.querySelector('button');
+    expect(button).not.toBeNull();
+    expect(button!.getAttribute('aria-pressed')).toBe('false');
+    expect(button!.textContent).toContain('OFF');
+    expect(button!.getAttribute('aria-label')).toBeTruthy();
+
+    button!.click();
+    expect(toggled).toBe(1);
+    // main.ts (the single source of truth for the mute flag) is responsible
+    // for calling set() back after actually flipping state — a click alone
+    // must not relabel the button, or the button and main.ts's own flag
+    // could disagree about which one is "real".
+    expect(button!.getAttribute('aria-pressed')).toBe('false');
+
+    toggle.set(true);
+    expect(button!.getAttribute('aria-pressed')).toBe('true');
+    expect(button!.textContent).toContain('ON');
+    expect(button!.textContent).not.toContain('OFF');
+  });
+
+  it('renders ON when constructed with initialOn: true, and can flip back to OFF via set()', () => {
+    const host = document.createElement('div');
+    const toggle = createSoundToggle(host, { initialOn: true, onToggle: () => {} });
+    const button = host.querySelector('button')!;
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.textContent).toContain('ON');
+
+    toggle.set(false);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(button.textContent).toContain('OFF');
+  });
+
+  it('repeated construction reuses the shared stylesheet without throwing', () => {
+    const hostA = document.createElement('div');
+    const hostB = document.createElement('div');
+    expect(() => createSoundToggle(hostA, { initialOn: false, onToggle: () => {} })).not.toThrow();
+    expect(() => createSoundToggle(hostB, { initialOn: false, onToggle: () => {} })).not.toThrow();
+    expect(document.querySelectorAll('#m9-sound-toggle-style').length).toBe(1);
+  });
+});
+
 describe('module-eval guard: the rest of the DOM-only UI layer', () => {
   it('ui/hud.ts constructs and updates without throwing', () => {
     const host = document.createElement('div');
@@ -85,7 +137,6 @@ describe('module-eval guard: the rest of the DOM-only UI layer', () => {
         bestLapSec: null,
         throttle: 0,
         sourceLabel: 'Keyboard',
-        muted: false,
       }),
     ).not.toThrow();
   });
@@ -97,9 +148,13 @@ describe('module-eval guard: the rest of the DOM-only UI layer', () => {
     expect(typeof menu.openResults).toBe('function');
 
     const gateHost = document.createElement('div');
-    expect(() => createStartGate(gateHost, () => {})).not.toThrow();
+    expect(() => createStartGate(gateHost, false, () => {})).not.toThrow();
     const gate = gateHost.querySelector('.m6-gate');
     expect(gate).not.toBeNull();
     expect(gate!.getAttribute('role')).toBe('dialog');
+
+    // Both branches of the sound-state line (brief section 2) get a pass too.
+    const gateHostOn = document.createElement('div');
+    expect(() => createStartGate(gateHostOn, true, () => {})).not.toThrow();
   });
 });

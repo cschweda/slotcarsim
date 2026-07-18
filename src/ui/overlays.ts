@@ -146,6 +146,83 @@ export interface CalibrationOverlay {
   set(active: boolean, secondsLeft: number): void;
 }
 
+// ---- Sound toggle ---------------------------------------------------------
+
+const SOUND_TOGGLE_STYLE_ID = 'm9-sound-toggle-style';
+
+function ensureSoundToggleStyles(): void {
+  if (document.getElementById(SOUND_TOGGLE_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = SOUND_TOGGLE_STYLE_ID;
+  style.textContent = `
+    .m9-sound-toggle {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 110;
+      display: block;
+      font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: #e8e8e8;
+      background: rgba(10, 10, 12, 0.72);
+      border: 1px solid rgba(255, 180, 84, 0.22);
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .m9-sound-toggle:hover {
+      border-color: rgba(255, 180, 84, 0.5);
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+export interface SoundToggle {
+  /**
+   * Reflects `on` in the button's label + `aria-pressed`. Never drives audio
+   * itself — main.ts's own mute flag is the single source of truth; it calls
+   * this AFTER actually applying a change, the same way whether that change
+   * came from this button's click or the 'M' keyboard shortcut, so the two
+   * can never disagree about the current state.
+   */
+  set(on: boolean): void;
+}
+
+/**
+ * Persistent top-right "SOUND: ON/OFF" button. Meant to be mounted once
+ * (main.ts does so right after the start gate is dismissed) and left in the
+ * DOM for the rest of the session — a z-index above the menu system's (100)
+ * full-screen dialogs keeps it visible and clickable over the setup menu,
+ * countdown, racing, and results alike, satisfying "prominent, always
+ * available" without any per-phase show/hide logic of its own.
+ */
+export function createSoundToggle(
+  host: HTMLElement,
+  options: { initialOn: boolean; onToggle: () => void },
+): SoundToggle {
+  ensureSoundToggleStyles();
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'm9-sound-toggle';
+  host.appendChild(button);
+
+  function render(on: boolean): void {
+    button.textContent = on ? '🔊 SOUND: ON' : '🔇 SOUND: OFF';
+    button.setAttribute('aria-pressed', on ? 'true' : 'false');
+    button.setAttribute('aria-label', on ? 'Sound is on — click to mute' : 'Sound is off — click to unmute');
+  }
+
+  render(options.initialOn);
+  button.addEventListener('click', options.onToggle);
+
+  return { set: render };
+}
+
 export function createCalibrationOverlay(host: HTMLElement): CalibrationOverlay {
   ensureCalibrationStyles();
 
