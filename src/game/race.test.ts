@@ -6,6 +6,8 @@ import {
   PLAYER_CAR_INDEX,
   type RaceConfig,
   createRace,
+  defaultAssistsForMode,
+  raceHasAiCar,
 } from './race';
 
 const DT = 1 / 120;
@@ -18,6 +20,9 @@ function raceConfig(overrides: Partial<RaceConfig> = {}): RaceConfig {
     aiDifficulty: 0.65,
     trackId: 'oval',
     playerCar: 'p917',
+    practiceCompanion: 'alone',
+    stickiness: 'authentic',
+    coach: false,
     ...overrides,
   };
 }
@@ -145,5 +150,98 @@ describe('createRace — time trial', () => {
     expect(race.phase()).toBe('racing');
     expect(race.playerBestLapSec()).toBeCloseTo(1.8, 9);
     expect(race.laps(PLAYER_CAR_INDEX)).toBe(12);
+  });
+});
+
+describe('createRace — practice (alone)', () => {
+  function startedPractice(overrides: Partial<RaceConfig> = {}) {
+    const race = createRace(raceConfig({ mode: 'practice', practiceCompanion: 'alone', ...overrides }));
+    race.start();
+    advance(race, COUNTDOWN_BEATS + 0.05);
+    return race;
+  }
+
+  it('has a single (player) car — same semantics as time trial: never finishes, tracks best lap', () => {
+    const race = startedPractice();
+    for (let l = 1; l <= 20; l++) race.handleSimEvent(lap(PLAYER_CAR_INDEX, l, l === 5 ? 1.5 : 2.0));
+    // Way past any race's lapsToWin (5), but practice is unlimited — never 'finished' at ANY lap count.
+    expect(race.phase()).toBe('racing');
+    expect(race.results()).toBeNull();
+    expect(race.playerBestLapSec()).toBeCloseTo(1.5, 9);
+    expect(race.laps(PLAYER_CAR_INDEX)).toBe(20);
+  });
+
+  it('ignores lap events for the AI car index (no companion present)', () => {
+    const race = startedPractice();
+    race.handleSimEvent(lap(AI_CAR_INDEX, 1, 2.0));
+    expect(race.laps(AI_CAR_INDEX)).toBe(0);
+  });
+});
+
+describe('createRace — practice (AI companion)', () => {
+  function startedPracticeWithAi(overrides: Partial<RaceConfig> = {}) {
+    const race = createRace(
+      raceConfig({ mode: 'practice', practiceCompanion: 'ai', aiDifficulty: 0.9, ...overrides }),
+    );
+    race.start();
+    advance(race, COUNTDOWN_BEATS + 0.05);
+    return race;
+  }
+
+  it('tallies BOTH cars laps, and never finishes regardless of how many laps either car completes', () => {
+    const race = startedPracticeWithAi();
+    for (let l = 1; l <= 50; l++) race.handleSimEvent(lap(AI_CAR_INDEX, l, 1.9));
+    for (let l = 1; l <= 50; l++) race.handleSimEvent(lap(PLAYER_CAR_INDEX, l, 2.0));
+    expect(race.phase()).toBe('racing'); // never 'finished' — practice has no win condition, AI or no AI
+    expect(race.results()).toBeNull();
+    expect(race.laps(AI_CAR_INDEX)).toBe(50);
+    expect(race.laps(PLAYER_CAR_INDEX)).toBe(50);
+    expect(race.playerBestLapSec()).toBeCloseTo(2.0, 9);
+  });
+
+  it('plumbs the chosen aiDifficulty through unchanged (config passthrough)', () => {
+    const race = startedPracticeWithAi({ aiDifficulty: 0.35 });
+    expect(race.config.aiDifficulty).toBe(0.35);
+  });
+});
+
+describe('raceHasAiCar(config)', () => {
+  it('true for race vs AI', () => {
+    expect(raceHasAiCar(raceConfig({ mode: 'race' }))).toBe(true);
+  });
+
+  it('false for time trial', () => {
+    expect(raceHasAiCar(raceConfig({ mode: 'timetrial' }))).toBe(false);
+  });
+
+  it('practice: true only when practiceCompanion is "ai"', () => {
+    expect(raceHasAiCar(raceConfig({ mode: 'practice', practiceCompanion: 'alone' }))).toBe(false);
+    expect(raceHasAiCar(raceConfig({ mode: 'practice', practiceCompanion: 'ai' }))).toBe(true);
+  });
+});
+
+describe('defaultAssistsForMode(mode) — per-mode menu defaults', () => {
+  it('practice defaults to the most forgiving learning setup: Sticky, coach on, alone', () => {
+    expect(defaultAssistsForMode('practice')).toEqual({
+      stickiness: 'sticky',
+      coach: true,
+      practiceCompanion: 'alone',
+    });
+  });
+
+  it('time trial defaults to the purist setup: Authentic, coach off', () => {
+    expect(defaultAssistsForMode('timetrial')).toEqual({
+      stickiness: 'authentic',
+      coach: false,
+      practiceCompanion: 'alone',
+    });
+  });
+
+  it('race vs AI defaults to Off/Authentic — a fair, unassisted contest', () => {
+    expect(defaultAssistsForMode('race')).toEqual({
+      stickiness: 'authentic',
+      coach: false,
+      practiceCompanion: 'alone',
+    });
   });
 });

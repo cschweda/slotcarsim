@@ -4,8 +4,17 @@
 // (arrows + Enter) AND clickable, and are marked up as ARIA dialogs
 // (role=dialog, aria-modal, aria-label). M7 owns all of this; main.ts wires
 // the chosen RaceConfig into the sim/race and shows results when a race ends.
+import { STICKINESS_LEVELS, stickinessIndex, type StickinessId } from '../config/tuning';
 import type { CarStyleId } from '../render/carMesh';
-import type { RaceConfig, RaceMode, RaceResults, TrackId } from '../game/race';
+import {
+  defaultAssistsForMode,
+  raceHasAiCar,
+  type PracticeCompanion,
+  type RaceConfig,
+  type RaceMode,
+  type RaceResults,
+  type TrackId,
+} from '../game/race';
 
 const STYLE_ID = 'm6-gate-style';
 
@@ -104,7 +113,8 @@ function ensureStyles(): void {
 const CONTROLS_ITEMS: ReadonlyArray<readonly [label: string, value: string]> = [
   ['THROTTLE', 'hold Space or ↑'],
   ['SOUND', 'M or the Sound button'],
-  ['MENU / ABORT', 'Esc'],
+  ['STICKINESS (Practice)', '[ / ] to adjust'],
+  ['MENU / ABORT', 'Esc or the MENU button'],
   ['MENUS', '↑↓ choose · ←→ change · Enter select'],
   ['GAMEPAD', 'squeeze the right trigger (auto-detected)'],
 ];
@@ -174,9 +184,11 @@ export function createStartGate(container: HTMLElement, soundOn: boolean, onStar
 
 // ---- Option tables -------------------------------------------------------
 
+// Practice listed FIRST — it's the beginner path (M10).
 const MODES: Array<{ value: RaceMode; label: string }> = [
-  { value: 'race', label: 'Race vs AI' },
+  { value: 'practice', label: 'Practice' },
   { value: 'timetrial', label: 'Time Trial' },
+  { value: 'race', label: 'Race vs AI' },
 ];
 const DIFFICULTIES: Array<{ value: number; label: string }> = [
   { value: 0.35, label: 'Easy' },
@@ -195,6 +207,11 @@ const LANE_LABELS: Record<TrackId, [string, string]> = {
   oval: ['Inner', 'Outer'],
   figure8: ['Lane 1', 'Lane 2'],
 };
+/** Practice-only "Company" row: race alone, or with an AI pace car for company (no win condition either way). */
+const COMPANIONS: Array<{ value: PracticeCompanion; label: string }> = [
+  { value: 'alone', label: 'Alone' },
+  { value: 'ai', label: 'AI car' },
+];
 
 interface OptionRow {
   type: 'option';
@@ -230,6 +247,14 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
   let trackIdx = 0;
   let laneIdx = 0;
   let carIdx = 0;
+  // M10: assists — initialized to the FIRST mode's own defaults (Practice is
+  // first, see MODES above) and reset to a mode's defaults every time the
+  // Mode row changes (see buildRows' Mode cycle handler below); freely
+  // overridable afterward via their own rows.
+  const initialAssists = defaultAssistsForMode(MODES[modeIdx]!.value);
+  let stickinessIdx = stickinessIndex(initialAssists.stickiness);
+  let coachOn = initialAssists.coach;
+  let companionIdx = Math.max(0, COMPANIONS.findIndex((c) => c.value === initialAssists.practiceCompanion));
 
   let root: HTMLElement | null = null;
   let keyHandler: ((e: KeyboardEvent) => void) | null = null;
@@ -249,7 +274,17 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
       aiDifficulty: DIFFICULTIES[diffIdx]!.value,
       trackId: TRACKS_OPT[trackIdx]!.value,
       playerCar: onStartCar,
+      practiceCompanion: COMPANIONS[companionIdx]!.value,
+      stickiness: STICKINESS_LEVELS[stickinessIdx]!.id,
+      coach: coachOn,
     };
+  }
+
+  /** Label for the setup panel's start action, per mode. */
+  function startLabel(mode: RaceMode): string {
+    if (mode === 'race') return 'START RACE';
+    if (mode === 'practice') return 'START PRACTICE';
+    return 'START TIME TRIAL';
   }
 
   function openSetup(onStart: (config: RaceConfig) => void): void {
@@ -273,13 +308,15 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
 
     const controlsHint = document.createElement('div');
     controlsHint.className = 'm7-menu__hint';
-    controlsHint.textContent = 'Space/↑ = throttle · M = sound · Esc = abort';
+    controlsHint.textContent = 'Space/↑ = throttle · M = sound · Esc/MENU = abort · [ ] = stickiness (Practice)';
     panel.appendChild(controlsHint);
 
     let selected = 0;
 
     const buildRows = (): Row[] => {
       const trackId = TRACKS_OPT[trackIdx]!.value;
+      const mode = MODES[modeIdx]!.value;
+      const hasAi = raceHasAiCar({ mode, practiceCompanion: COMPANIONS[companionIdx]!.value });
       const rows: Row[] = [
         {
           type: 'option',
@@ -287,10 +324,30 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
           valueLabel: MODES[modeIdx]!.label,
           cycle: (d) => {
             modeIdx = wrap(modeIdx + d, MODES.length);
+            // Switching modes resets the assists to THAT mode's own defaults
+            // (still freely overridable via their own rows afterward) — see
+            // game/race.ts's defaultAssistsForMode.
+            const defaults = defaultAssistsForMode(MODES[modeIdx]!.value);
+            stickinessIdx = stickinessIndex(defaults.stickiness);
+            coachOn = defaults.coach;
+            companionIdx = Math.max(
+              0,
+              COMPANIONS.findIndex((c) => c.value === defaults.practiceCompanion),
+            );
           },
         },
       ];
-      if (MODES[modeIdx]!.value === 'race') {
+      if (mode === 'practice') {
+        rows.push({
+          type: 'option',
+          label: 'Company',
+          valueLabel: COMPANIONS[companionIdx]!.label,
+          cycle: (d) => {
+            companionIdx = wrap(companionIdx + d, COMPANIONS.length);
+          },
+        });
+      }
+      if (hasAi) {
         rows.push({
           type: 'option',
           label: 'Difficulty',
@@ -301,6 +358,22 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
         });
       }
       rows.push(
+        {
+          type: 'option',
+          label: 'Stickiness',
+          valueLabel: STICKINESS_LEVELS[stickinessIdx]!.label,
+          cycle: (d) => {
+            stickinessIdx = wrap(stickinessIdx + d, STICKINESS_LEVELS.length);
+          },
+        },
+        {
+          type: 'option',
+          label: 'Coach',
+          valueLabel: coachOn ? 'On' : 'Off',
+          cycle: () => {
+            coachOn = !coachOn;
+          },
+        },
         {
           type: 'option',
           label: 'Track',
@@ -327,7 +400,7 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
         },
         {
           type: 'action',
-          label: MODES[modeIdx]!.value === 'race' ? 'START RACE' : 'START TIME TRIAL',
+          label: startLabel(mode),
           activate: () => {
             teardown();
             onStart(currentConfig(CARS[carIdx]!.value));
@@ -406,8 +479,9 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
     const panel = mountPanel('Race results');
 
     // openResults is only ever reached via a 'finished' race phase, which
-    // (per game/race.ts) only a real race (not time trial, which has no win
-    // condition) can produce — so this is always a win/lose result.
+    // (per game/race.ts) only a real race (not time trial or practice —
+    // neither has a win condition, AI companion or not) can produce — so
+    // this is always a win/lose result.
     const playerWon = results.winnerCarIndex === 0;
     const banner = document.createElement('div');
     banner.className = `m7-banner ${playerWon ? 'm7-banner--win' : 'm7-banner--lose'}`;

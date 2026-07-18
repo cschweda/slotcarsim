@@ -7,10 +7,13 @@ import { createMotorVoice } from './audio/motorVoice';
 import type { Sfx } from './audio/sfx';
 import { createSfx } from './audio/sfx';
 import { TRACKS } from './config/tracks';
-import { TUNING } from './config/tuning';
+import type { StickinessId } from './config/tuning';
+import { STICKINESS_LEVELS, TUNING, applyStickiness, stepStickiness, stickinessIndex } from './config/tuning';
 import type { CarStyleId } from './render/carMesh';
 import type { RaceConfig, RaceMachine, TrackId } from './game/race';
-import { AI_CAR_INDEX, PLAYER_CAR_INDEX, createRace } from './game/race';
+import { AI_CAR_INDEX, PLAYER_CAR_INDEX, createRace, raceHasAiCar } from './game/race';
+import type { Coach } from './game/coach';
+import { createCoach } from './game/coach';
 import { rumbleOnDeslot, rumbleOnReslot } from './input/gamepad';
 import { createInputManager } from './input/inputManager';
 import { DEFAULT_DT, createLoop } from './loop';
@@ -33,11 +36,13 @@ import type { LanePath } from './sim/track/path';
 import type { CarState, InputFrame, SimEvent } from './sim/types';
 import type { CarConfig, Sim } from './sim/world';
 import { createSim } from './sim/world';
+import { createCoachWidget } from './ui/coach';
+import type { CoachWidget } from './ui/coach';
 import { createDebugPanel } from './ui/debugPanel';
 import { createHud } from './ui/hud';
 import { createMenuSystem, createStartGate } from './ui/menus';
-import type { CalibrationOverlay, CountdownOverlay, SoundToggle } from './ui/overlays';
-import { createCalibrationOverlay, createCountdownOverlay, createSoundToggle } from './ui/overlays';
+import type { CalibrationOverlay, CountdownOverlay, MenuButton, SoundToggle } from './ui/overlays';
+import { createCalibrationOverlay, createCountdownOverlay, createMenuButton, createSoundToggle } from './ui/overlays';
 import { loadSoundPref, saveSoundPref } from './ui/soundPref';
 
 /** Pace/AI motor voices detune +26 cents (~+1.5%) above the player's 0. */
@@ -63,6 +68,9 @@ const DEFAULT_CONFIG: RaceConfig = {
   aiDifficulty: 0.65,
   trackId: 'oval',
   playerCar: 'p917',
+  practiceCompanion: 'alone',
+  stickiness: 'authentic',
+  coach: false,
 };
 
 // ---- three.js scene handle + ?query flags --------------------------------
@@ -103,6 +111,10 @@ let countdown: CountdownOverlay | undefined;
 let calibrationOverlay: CalibrationOverlay | undefined;
 /** Persistent top-right SOUND: ON/OFF button — created once the start gate is dismissed (see init()'s createStartGate callback), then kept for the rest of the session. */
 let soundToggle: SoundToggle | undefined;
+/** M10: persistent top-right MENU button, stacked below the sound toggle — created alongside it; visible only during countdown/racing (see frame()). */
+let menuButton: MenuButton | undefined;
+/** M10: persistent throttle-coach HUD widget — created once; visible only for a session with RaceConfig.coach on (see buildSession()). */
+let coachWidget: CoachWidget | undefined;
 /** Rolling frame-time monitor that steps DPR/shadow quality down under sustained load and back up under sustained headroom (never above ?quality). */
 let qualityLadder: ReturnType<typeof createQualityLadder> | undefined;
 
@@ -136,10 +148,14 @@ interface Session {
   /** This track's own bbox centroid/half-width — audio pan reference (was a hardcoded oval-shaped constant). */
   audioCenterX: number;
   audioHalfWidth: number;
+  /** M10: undefined unless this session's RaceConfig.coach is on — built for the player's own lane only. */
+  coach: Coach | undefined;
 }
 let session: Session | undefined;
 let racingTick = 0;
 let resultsShown = false;
+/** M10: this session's CURRENT stickiness level — starts at config.stickiness, then tracks every practice-mode [ ]/[ ] live-adjust (see the keydown handler). */
+let currentStickiness: StickinessId = 'authentic';
 
 function otherCar(style: CarStyleId): CarStyleId {
   return style === 'p917' ? 'f512' : 'p917';
@@ -161,6 +177,14 @@ function teardownSession(): void {
 function buildSession(config: RaceConfig): void {
   teardownSession();
 
+  // M10: stickiness is applied to the SHARED TUNING singleton — the exact
+  // ?tune live-mutation pattern (config/tuning.ts's applyStickiness mutates
+  // gripSoft/gripHard in place) — so it's already in effect before createSim
+  // and createCoach below ever read cfg, and a later dev ?tune slider drag
+  // still works normally against whatever level this session applied.
+  applyStickiness(TUNING, config.stickiness);
+  currentStickiness = config.stickiness;
+
   const track = buildTrack(TRACKS[config.trackId].refs);
   const bbox = computeTrackBBox(track);
 
@@ -171,8 +195,8 @@ function buildSession(config: RaceConfig): void {
   let carsView: CarsView | undefined;
   let debugView: DebugView | undefined;
   const playerStyle = config.playerCar;
-  const styles: CarStyleId[] =
-    config.mode === 'race' ? [playerStyle, otherCar(playerStyle)] : [playerStyle];
+  const hasAi = raceHasAiCar(config);
+  const styles: CarStyleId[] = hasAi ? [playerStyle, otherCar(playerStyle)] : [playerStyle];
   if (showDebug) {
     debugView = createDebugView(scene, track);
   } else {
@@ -181,23 +205,24 @@ function buildSession(config: RaceConfig): void {
   }
 
   const otherLane: 0 | 1 = config.playerLane === 0 ? 1 : 0;
-  const carConfigs: CarConfig[] =
-    config.mode === 'race'
-      ? [
-          { lane: config.playerLane, controlled: 'input' },
-          { lane: otherLane, controlled: 'ai', difficulty: config.aiDifficulty },
-        ]
-      : [{ lane: config.playerLane, controlled: 'input' }];
+  const carConfigs: CarConfig[] = hasAi
+    ? [
+        { lane: config.playerLane, controlled: 'input' },
+        { lane: otherLane, controlled: 'ai', difficulty: config.aiDifficulty },
+      ]
+    : [{ lane: config.playerLane, controlled: 'input' }];
 
   // Fresh seed per race. Date.now() is fine HERE (main.ts is outside the sim);
   // the sim itself derives everything from this seed. Logged for reproducibility.
   const seed = Date.now() % 2147483647;
   // eslint-disable-next-line no-console
   console.log(
-    `[race] seed=${seed} track=${config.trackId} mode=${config.mode} difficulty=${config.aiDifficulty} playerLane=${config.playerLane} car=${config.playerCar}`,
+    `[race] seed=${seed} track=${config.trackId} mode=${config.mode} difficulty=${config.aiDifficulty} playerLane=${config.playerLane} car=${config.playerCar} stickiness=${config.stickiness} coach=${config.coach}`,
   );
   const sim = createSim({ track, cars: carConfigs, cfg: TUNING, seed });
   const race = createRace(config);
+  const coach = config.coach ? createCoach(track.lanes[config.playerLane], TUNING) : undefined;
+  coachWidget?.setVisible(config.coach);
 
   const motorVoices = engine
     ? styles.map((_style, i) =>
@@ -218,6 +243,7 @@ function buildSession(config: RaceConfig): void {
     motorVoices,
     audioCenterX: bbox.cx,
     audioHalfWidth: bbox.hx,
+    coach,
   };
   racingTick = 0;
   resultsShown = false;
@@ -264,6 +290,22 @@ function showResults(): void {
     onRestart: () => startRace(config),
     onMenu: () => openMenu(),
   });
+}
+
+/**
+ * Abandon a live race and return to the menu — the ONE path both Esc and the
+ * M10 on-screen MENU button funnel through, so the two can never disagree
+ * about what "abort" does. A no-op outside countdown/racing (e.g. a stray
+ * click while idle or on the results screen, both of which have their own
+ * way back already).
+ */
+function abortToMenu(): void {
+  if (!session) return;
+  const phase = session.race.phase();
+  if (phase !== 'countdown' && phase !== 'racing') return;
+  session.race.abort();
+  countdown?.hide();
+  openMenu();
 }
 
 // ---- Camera framing ------------------------------------------------------
@@ -454,6 +496,11 @@ function frame(timestamp: number): void {
 
     const phase = session.race.phase();
 
+    // M10: the on-screen MENU button is only useful (and only shown) while a
+    // race is actually live — the menu/results screens already have their
+    // own way back.
+    menuButton?.setVisible(phase === 'countdown' || phase === 'racing');
+
     // Outside a race (menu, countdown), poll the gamepad directly (never the
     // keyboard, whose read() would otherwise ramp up its throttle while a
     // key is merely being held at the menu) so connection detection and the
@@ -534,18 +581,31 @@ function frame(timestamp: number): void {
       inputManager?.gamepadCalibrationSecondsLeft() ?? 0,
     );
 
+    // M10: throttle coach — fed the player's own INTERPOLATED (s, v), same
+    // smoothing as the render pose, so the gauge doesn't step at 120Hz.
+    if (session.coach && coachWidget) {
+      const playerLane = currentSim.laneFor(PLAYER_CAR_INDEX);
+      const playerPrev = prevStates[PLAYER_CAR_INDEX]!;
+      const playerCurr = currStates[PLAYER_CAR_INDEX]!;
+      const s = wrapLerp(playerPrev.s, playerCurr.s, alpha, playerLane.totalLength);
+      const v = lerp(playerPrev.v, playerCurr.v, alpha);
+      coachWidget.update(session.coach.advise({ s, v }, dtFrame));
+    }
+
     // HUD.
     if (hud) {
       const race = session.race;
       const isRace = session.config.mode === 'race';
+      const hasAi = raceHasAiCar(session.config);
       hud.update({
         lap: race.laps(PLAYER_CAR_INDEX),
         lastLapSec: race.playerLastLapSec(),
         bestLapSec: race.playerBestLapSec(),
         throttle: pendingInput.throttle,
         sourceLabel: inputManager ? inputManager.activeSourceLabel() : '',
+        practice: session.config.mode === 'practice',
         lapTarget: isRace ? session.config.lapsToWin : undefined,
-        opponentLap: isRace ? race.laps(AI_CAR_INDEX) : undefined,
+        opponentLap: hasAi ? race.laps(AI_CAR_INDEX) : undefined,
         position: isRace
           ? racePosition(
               race.laps(PLAYER_CAR_INDEX),
@@ -669,6 +729,7 @@ function init(): void {
 
     inputManager = createInputManager();
     hud = createHud(canvasHost);
+    coachWidget = createCoachWidget(canvasHost);
     debugPanel = createDebugPanel(container, canvasHost, TUNING);
     menu = createMenuSystem(canvasHost);
     countdown = createCountdownOverlay(canvasHost);
@@ -705,6 +766,7 @@ function init(): void {
       attachVoices(); // the default session predates audio; give it voices now
       applyMuted(); // silence the fresh (always-unmuted-by-construction) engine if the loaded/default preference is off
       soundToggle = createSoundToggle(canvasHost, { initialOn: !muted, onToggle: toggleSound });
+      menuButton = createMenuButton(canvasHost, abortToMenu);
       openMenu();
     });
   }
@@ -733,19 +795,28 @@ function init(): void {
     }
   });
 
-  // Esc during a race aborts back to the menu; 'M' toggles mute.
+  // Esc (or the on-screen MENU button, same abortToMenu() path) aborts back
+  // to the menu; 'M' toggles mute; '[' / ']' live-step stickiness — practice
+  // mode only, while actually racing (see the M10 brief).
   window.addEventListener('keydown', (event) => {
-    if (event.code === 'Escape' && session) {
-      const phase = session.race.phase();
-      if (phase === 'countdown' || phase === 'racing') {
-        session.race.abort();
-        countdown?.hide();
-        openMenu();
-      }
+    if (event.code === 'Escape') {
+      abortToMenu();
       return;
     }
     if (event.code === 'KeyM' && engine) {
       toggleSound();
+      return;
+    }
+    if (event.code === 'BracketLeft' || event.code === 'BracketRight') {
+      if (!session || session.config.mode !== 'practice' || session.race.phase() !== 'racing') return;
+      const dir = event.code === 'BracketRight' ? 1 : -1;
+      const nextId = stepStickiness(currentStickiness, dir);
+      if (nextId === currentStickiness) return; // already clamped at this end
+      currentStickiness = nextId;
+      applyStickiness(TUNING, nextId);
+      session.coach?.recompute(TUNING);
+      const level = STICKINESS_LEVELS[stickinessIndex(nextId)]!;
+      hud?.flashMessage(level.label.toUpperCase());
     }
   });
 }

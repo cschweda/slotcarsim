@@ -6,14 +6,25 @@
 //
 // `CarStyleId` is a pure string-union type import (erased at build/test time),
 // so pulling it from render/carMesh introduces no Three or DOM dependency.
+// `StickinessId` (config/tuning.ts) is likewise a type-only import.
+import type { StickinessId } from '../config/tuning';
 import type { CarStyleId } from '../render/carMesh';
 import type { SimEvent } from '../sim/types';
 
-export type RaceMode = 'timetrial' | 'race';
+/**
+ * M10: 'practice' is a beginner-friendly, pressure-free mode — the same
+ * "unlimited, no winner" semantics as 'timetrial' (see createRace below), but
+ * a distinct value so UI/config can branch on it (default assists, an
+ * optional AI pace companion instead of a fixed opponent, a different HUD
+ * header). Only 'race' can ever produce a winner/'finished' phase.
+ */
+export type RaceMode = 'practice' | 'timetrial' | 'race';
 export type RacePhase = 'idle' | 'countdown' | 'racing' | 'finished';
 export type TrackId = 'oval' | 'figure8';
+/** Practice-only: an optional AI car circulating alongside the player, purely as company — never a win condition. Ignored outside practice. */
+export type PracticeCompanion = 'alone' | 'ai';
 
-/** The two sim car indices a race uses. Player is always car 0; the AI (race mode) is car 1. */
+/** The two sim car indices a race uses. Player is always car 0; the AI (race mode, or a practice companion) is car 1. */
 export const PLAYER_CAR_INDEX = 0;
 export const AI_CAR_INDEX = 1;
 /** Countdown length in whole-second beats: "3", "2", "1", then "GO". */
@@ -26,6 +37,43 @@ export interface RaceConfig {
   aiDifficulty: number;
   trackId: TrackId;
   playerCar: CarStyleId;
+  /** Practice-only choice of whether an AI pace companion joins — outside practice this field is ignored; raceHasAiCar() below is the sole source of truth for whether a session actually has one ('race' always does, 'timetrial' never does). */
+  practiceCompanion: PracticeCompanion;
+  /** M10: beginner grip assist multiplier, shared by every car in the session — see config/tuning.ts's STICKINESS_LEVELS. */
+  stickiness: StickinessId;
+  /** M10: whether the real-time throttle coach HUD widget is shown this session (player's own lane only). */
+  coach: boolean;
+}
+
+/**
+ * Whether this config's session has a second, AI-driven car: always for
+ * 'race', never for 'timetrial', and for 'practice' only when the player
+ * picked an AI companion. The single source of truth for "how many cars"
+ * shared by createRace (below), main.ts's session build, and ui/menus.ts's
+ * Difficulty-row visibility — so the three can never disagree.
+ */
+export function raceHasAiCar(config: Pick<RaceConfig, 'mode' | 'practiceCompanion'>): boolean {
+  return config.mode === 'race' || (config.mode === 'practice' && config.practiceCompanion === 'ai');
+}
+
+export interface AssistDefaults {
+  stickiness: StickinessId;
+  coach: boolean;
+  practiceCompanion: PracticeCompanion;
+}
+
+/**
+ * Per-mode default assists, applied by the menu whenever the player switches
+ * the Mode row (freely overridable afterward via the Stickiness/Coach/Company
+ * rows themselves): Practice defaults to the most forgiving learning setup
+ * (Sticky grip, coach on, no AI company — the beginner path); Time Trial
+ * defaults to the purist setup (Authentic grip, coach off); Race vs AI
+ * defaults to Off/Authentic — a fair, unassisted contest against an AI that
+ * shares the exact same cfg.
+ */
+export function defaultAssistsForMode(mode: RaceMode): AssistDefaults {
+  if (mode === 'practice') return { stickiness: 'sticky', coach: true, practiceCompanion: 'alone' };
+  return { stickiness: 'authentic', coach: false, practiceCompanion: 'alone' };
 }
 
 /** One countdown tick — a beep + the number to flash. `final` is the GO tone. */
@@ -70,7 +118,7 @@ export interface RaceMachine {
 }
 
 export function createRace(config: RaceConfig): RaceMachine {
-  const carIndices = config.mode === 'race' ? [PLAYER_CAR_INDEX, AI_CAR_INDEX] : [PLAYER_CAR_INDEX];
+  const carIndices = raceHasAiCar(config) ? [PLAYER_CAR_INDEX, AI_CAR_INDEX] : [PLAYER_CAR_INDEX];
 
   let phase: RacePhase = 'idle';
   let countdownElapsed = 0;
