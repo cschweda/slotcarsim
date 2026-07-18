@@ -3,8 +3,10 @@ import { TRACKS } from './config/tracks';
 import { TUNING } from './config/tuning';
 import { createInputManager } from './input/inputManager';
 import { DEFAULT_DT, createLoop } from './loop';
-import type { CarBoxes, CarPose } from './render/debugView';
-import { createCarBoxes, createDebugView } from './render/debugView';
+import type { CarRenderPose, CarsView } from './render/carsView';
+import { createCarsView } from './render/carsView';
+import type { CarPose, DebugView } from './render/debugView';
+import { createDebugView } from './render/debugView';
 import { createEnvironment } from './render/environment';
 import { addLookDevContent } from './render/lookdev';
 import { createScene, type Quality } from './render/scene';
@@ -32,7 +34,8 @@ const sceneHandle = createScene(container, { quality });
 const { scene, camera, keyLight, render } = sceneHandle;
 
 let sim: ReturnType<typeof createSim> | undefined;
-let carView: CarBoxes | undefined;
+let carsView: CarsView | undefined; // photoreal AFX bodies (default view)
+let debugView: DebugView | undefined; // flat neon boxes (?debug)
 let inputManager: ReturnType<typeof createInputManager> | undefined;
 let hud: ReturnType<typeof createHud> | undefined;
 let debugPanel: ReturnType<typeof createDebugPanel> | undefined;
@@ -53,14 +56,14 @@ if (showLookDev) {
   if (showDebug) {
     // Geometry-correctness view: flat ground + neon lane ribbons + neon boxes.
     addGroundPlane();
-    carView = createDebugView(scene, track);
+    debugView = createDebugView(scene, track);
   } else {
     // Photoreal view: wood table + dark room + the real extruded track mesh,
-    // with the M3 car boxes reskinned as neutral dark plastic (real art in M5).
+    // with the M5 procedural AFX cars (player Porsche 917, pace Ferrari 512).
     createEnvironment(scene, keyLight);
     const trackMesh = createTrackMesh(track);
     scene.add(trackMesh.group);
-    carView = createCarBoxes(scene, 'plastic');
+    carsView = createCarsView(scene, track, ['p917', 'f512']);
   }
 
   sim = createSim({
@@ -160,6 +163,59 @@ function computeCarPose(prevState: CarState, currState: CarState, alpha: number,
   return { x: pos.x, y: pos.y, yaw: heading + slideYaw };
 }
 
+/**
+ * A car's render pose for the real AFX bodies (carsView). Same sub-tick
+ * interpolation + GENERATION GUARD as computeCarPose, but it hands carsView the
+ * raw (interpolated) lane s + slide so carsView can do the pin-guided chord
+ * orientation itself; a tumble hands over the sim's plan-view pose plus the
+ * yawRate the render-side theatrics spin from.
+ */
+function computeCarRenderPose(
+  prevState: CarState,
+  currState: CarState,
+  alpha: number,
+  lane: LanePath,
+): CarRenderPose {
+  if (currState.phase !== 'slot') {
+    const pose = tumblePose(
+      { phase: currState.phase, phaseTicks: currState.phaseTicks, tumble: currState.tumble! },
+      TUNING,
+      DEFAULT_DT,
+    );
+    return {
+      mode: 'tumble',
+      x: pose.pos.x,
+      y: pose.pos.y,
+      yaw: pose.yaw,
+      yawRate: currState.tumble!.yawRate,
+      progress: pose.progress,
+      phase: currState.phase,
+    };
+  }
+
+  if (prevState.generation !== currState.generation) {
+    return {
+      mode: 'slot',
+      s: currState.s,
+      slideYaw: currState.slideYaw,
+      v: currState.v,
+      lane: currState.lane,
+      generation: currState.generation,
+    };
+  }
+
+  const s = wrapLerp(prevState.s, currState.s, alpha, lane.totalLength);
+  const slideYaw = lerp(prevState.slideYaw, currState.slideYaw, alpha);
+  return {
+    mode: 'slot',
+    s,
+    slideYaw,
+    v: currState.v,
+    lane: currState.lane,
+    generation: currState.generation,
+  };
+}
+
 let lastTimestamp: number | undefined;
 
 function frame(timestamp: number): void {
@@ -173,16 +229,23 @@ function frame(timestamp: number): void {
 
     handlePlayerLapEvents(frameEvents);
 
-    if (sim && carView) {
-      const currentSim = sim; // narrowed const so the closure below is safe
+    if (sim && (carsView || debugView)) {
+      const currentSim = sim; // narrowed const so the closures below are safe
       const prevStates = currentSim.prevCarStates();
       const currStates = currentSim.carStates();
-      const poses = currStates.map((curr, i) => {
-        const prevState = prevStates[i]!;
-        const lane = currentSim.laneFor(i);
-        return computeCarPose(prevState, curr, alpha, lane);
-      });
-      carView.setCarPoses(poses);
+      if (carsView) {
+        carsView.update(
+          currStates.map((curr, i) =>
+            computeCarRenderPose(prevStates[i]!, curr, alpha, currentSim.laneFor(i)),
+          ),
+        );
+      } else if (debugView) {
+        debugView.setCarPoses(
+          currStates.map((curr, i) =>
+            computeCarPose(prevStates[i]!, curr, alpha, currentSim.laneFor(i)),
+          ),
+        );
+      }
     }
 
     if (hud) {
