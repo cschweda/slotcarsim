@@ -113,7 +113,9 @@ function ensureStyles(): void {
 const CONTROLS_ITEMS: ReadonlyArray<readonly [label: string, value: string]> = [
   ['THROTTLE', 'hold Space or ↑'],
   ['SOUND', 'M or the Sound button'],
-  ['CAMERA', 'wheel to zoom · drag to move the view'],
+  ['CAMERA VIEW', 'C cycles Table / Chase / Cockpit'],
+  ['COCKPIT SPEED', 'runs at ½× — T toggles full speed'],
+  ['TABLE CAMERA', 'wheel to zoom · drag to move (Table view only)'],
   ['STICKINESS (Practice)', '[ / ] to adjust'],
   ['R — instant replay', 'last ~3s at half speed · R again or Esc to end early'],
   ['MENU / ABORT', 'Esc or the MENU button'],
@@ -315,7 +317,7 @@ export function createMenuSystem(container: HTMLElement): MenuSystem {
     const controlsHint = document.createElement('div');
     controlsHint.className = 'm7-menu__hint';
     controlsHint.textContent =
-      'Space/↑ = throttle · M = sound · R = instant replay · Esc/MENU = abort · [ ] = stickiness (Practice)';
+      'Space/↑ = throttle · C = camera view · T = cockpit speed · M = sound · R = replay · Esc/MENU = abort · [ ] = stickiness (Practice)';
     panel.appendChild(controlsHint);
 
     let selected = 0;

@@ -23,6 +23,7 @@ import type { CarsView } from './render/carsView';
 import { createCarsView } from './render/carsView';
 import { ZOOM_DEFAULT, approachZoom, stepZoom, stepZoomFromStick } from './render/cameraZoom';
 import { panBoundsFromBBox, stepPan, stepPanFromStick, type PanBounds } from './render/cameraPan';
+import { createCameraRig } from './render/cameraRig';
 import { computeCarPose, computeCarRenderPose } from './render/carPose';
 import type { DebugView } from './render/debugView';
 import { createDebugView } from './render/debugView';
@@ -46,6 +47,7 @@ import { createHud } from './ui/hud';
 import { createMenuSystem, createStartGate } from './ui/menus';
 import type {
   CalibrationOverlay,
+  CameraButton,
   CountdownOverlay,
   MenuButton,
   ReplayBanner,
@@ -54,6 +56,7 @@ import type {
 } from './ui/overlays';
 import {
   createCalibrationOverlay,
+  createCameraButton,
   createCountdownOverlay,
   createMenuButton,
   createReplayBanner,
@@ -163,6 +166,17 @@ let soundToggle: SoundToggle | undefined;
 let menuButton: MenuButton | undefined;
 /** M11b: persistent top-right REPLAY button, stacked below MENU — created alongside it; visible whenever a replay could start or one is already playing (see frame()). */
 let replayButton: ReplayButton | undefined;
+/**
+ * M13: the camera-view rig (table / chase / cockpit + cockpit ½× time). Owns
+ * the selected view + the camera's position/lookAt/up/near/fov while a
+ * chase/cockpit frame is active; the existing applyCameraFraming() keeps the
+ * table view, zoom, and pan unchanged. Created once per session lifetime (not
+ * per race — the selected view persists across rebuilds), only when cars are
+ * actually rendered (never in ?debug's box view). undefined ⇒ table only.
+ */
+let cameraRig: ReturnType<typeof createCameraRig> | undefined;
+/** M13: persistent top-right VIEW button, stacked below REPLAY — cycles the camera view (same path as the `C` key). */
+let cameraButton: CameraButton | undefined;
 /** M11b: persistent top-center "REPLAY" banner + progress bar — created once (doesn't need the audio-unlock gesture, unlike the buttons above), shown only while a replay is actually playing. */
 let replayBanner: ReplayBanner | undefined;
 /** M10: persistent throttle-coach HUD widget — created once; visible only for a session with RaceConfig.coach on (see buildSession()), and hidden for the duration of a replay regardless (see frame()). */
@@ -452,6 +466,30 @@ function toggleReplay(): void {
   else enterReplay();
 }
 
+// ---- M13: camera view --------------------------------------------------------
+
+/** Refresh the VIEW button's label from the rig's current selected view + cockpit ½×/1× state. */
+function syncCameraButton(): void {
+  if (cameraRig) cameraButton?.set(cameraRig.mode(), !cameraRig.cockpitFullSpeed());
+}
+
+/** The ONE path both the 'C' key and the VIEW button's click funnel through — cycles table → chase → cockpit → table, flashing the new view's name. */
+function cycleCameraView(): void {
+  if (!cameraRig) return;
+  const next = cameraRig.cycle();
+  syncCameraButton();
+  const label = next === 'cockpit' ? 'COCKPIT ½×' : next.toUpperCase();
+  hud?.flashMessage(`VIEW · ${label}`);
+}
+
+/** The ONE path the 'T' key funnels through — toggles cockpit ½× ↔ full speed (a no-op outside cockpit). */
+function toggleCockpitSpeed(): void {
+  if (!cameraRig || cameraRig.mode() !== 'cockpit') return;
+  const full = cameraRig.toggleCockpitSpeed();
+  syncCameraButton();
+  hud?.flashMessage(full ? 'FULL SPEED · 1×' : 'HALF SPEED · ½×');
+}
+
 // ---- Camera framing ------------------------------------------------------
 
 interface TrackBBox {
@@ -586,6 +624,8 @@ function endPan(event: PointerEvent): void {
 function handlePointerDown(event: PointerEvent): void {
   if (panPointerId !== undefined) return;
   if (event.target !== renderer.domElement || event.button !== 0) return;
+  // M13: click-drag pan is TABLE-MODE ONLY — chase/cockpit is a follow camera.
+  if (cameraRig && cameraRig.mode() !== 'table') return;
   event.preventDefault();
   panPointerId = event.pointerId;
   lastPointerX = event.clientX;
@@ -691,11 +731,10 @@ function frame(timestamp: number): void {
       fpsEma = fpsEma + (instantFps - fpsEma) * FPS_SMOOTHING;
     }
 
-    // Ease the live zoom toward the wheel-driven target every frame,
-    // independent of race phase — zoom works in the menu/countdown too, not
-    // just mid-race.
-    zoomCurrent = approachZoom(zoomCurrent, zoomTarget, dtFrame);
-    applyCameraFraming();
+    // M13: the table view's zoom-ease + framing now happens in the unified
+    // camera block below (after the player pose is computed), so the chase/
+    // cockpit rig can take the camera over instead when either is selected.
+    // Zoom/pan stay TABLE-ONLY — see that block and the wheel/drag guards.
 
     const phase = session.race.phase();
     const liveSession = phase === 'countdown' || phase === 'racing';
@@ -712,7 +751,12 @@ function frame(timestamp: number): void {
     // easing above already reads. M11b: deliberately UNGATED by `inReplay` —
     // the camera (this, plus the wheel/drag listeners in init()) stays FULLY
     // LIVE during a replay; that's the feature's entire point.
-    if (liveSession) {
+    // M13: zoom/pan are TABLE-MODE ONLY — in chase/cockpit the rig owns the
+    // camera, so the left/right sticks go quiet (they'd otherwise fight the
+    // follow). `cameraRig.mode()` is the SELECTED view, so a deslot's momentary
+    // snap-to-table doesn't re-enable them mid-tumble.
+    const tableSelected = !cameraRig || cameraRig.mode() === 'table';
+    if (liveSession && tableSelected) {
       const stick = readGamepadCameraInput();
       if (stick) {
         panTarget = stepPanFromStick(panTarget, stick.panX, stick.panY, dtFrame, visibleWorldWidthAtCurrentZoom(), panBounds);
@@ -729,6 +773,10 @@ function frame(timestamp: number): void {
     // toggleReplay) ends one early, so it must stay visible/clickable
     // throughout, not just at the moment it became eligible.
     replayButton?.setVisible(liveSession && (inReplay || replayIsEligible()));
+    // M13: the VIEW button is available whenever a race is live (its label
+    // stays in sync via cycleCameraView/toggleCockpitSpeed, so it needs no
+    // per-frame relabel here).
+    cameraButton?.setVisible(liveSession);
 
     let renderPrevStates: readonly CarState[];
     let renderCurrStates: readonly CarState[];
@@ -770,7 +818,14 @@ function frame(timestamp: number): void {
       frameEvents = [];
       frameBeeps = [];
 
-      renderAlpha = loop.advance(dtFrame);
+      // M13: half-time in cockpit — scale ONLY the wall delta fed to the sim
+      // loop (½× while cockpit is selected and not toggled to full). The sim
+      // still ticks the identical fixed-dt deterministic sequence; only how
+      // much wall time maps to each tick changes, so lap times (sim-time) stay
+      // honest. Everything else this frame (camera smoothing, quality ladder,
+      // fps) uses the real dtFrame. Replay has its own pacing and never reaches
+      // here (loop.advance isn't called during playback).
+      renderAlpha = loop.advance(dtFrame * (cameraRig?.timeScale() ?? 1));
 
       for (const beep of frameBeeps) sfx?.countdownBeep(beep.final);
       handleAudioEvents(frameEvents);
@@ -810,6 +865,26 @@ function frame(timestamp: number): void {
       session.debugView.setCarPoses(carPoses);
     }
 
+    // --- M13: camera — chase/cockpit follow the player's SHARED render pose;
+    // table (incl. the deslot snap) keeps the fitted zoom/pan framing. Runs
+    // here, right after carsView.update(), so carAnchor() reads the exact
+    // group transform just written (no parallel pose math). Works identically
+    // during a replay: the anchor comes from the replayed frames' pose.
+    const playerAirborne = renderCurrStates[PLAYER_CAR_INDEX]?.phase !== 'slot';
+    const effView = cameraRig ? cameraRig.effectiveMode(playerAirborne) : 'table';
+    const anchor = (effView === 'chase' || effView === 'cockpit') ? session.carsView?.carAnchor(PLAYER_CAR_INDEX) ?? null : null;
+    if (cameraRig && anchor && (effView === 'chase' || effView === 'cockpit')) {
+      cameraRig.follow(effView, anchor, dtFrame);
+    } else {
+      cameraRig?.releaseToTable();
+      zoomCurrent = approachZoom(zoomCurrent, zoomTarget, dtFrame);
+      applyCameraFraming();
+    }
+    // TRUE first person: hide the player's ENTIRE car in cockpit (zero of their
+    // own geometry, on flat or banked track) — restored in full the instant the
+    // view is chase/table or the deslot snap fires. AI car stays fully visible.
+    session.carsView?.setBodyHidden(PLAYER_CAR_INDEX, effView === 'cockpit');
+
     // Contract: voices are silenced outside the racing phase. During
     // countdown the cars are parked at v=0 anyway (zeros are harmless and
     // consistent), but once a race ends (finished) or is Esc-aborted (idle)
@@ -832,10 +907,14 @@ function frame(timestamp: number): void {
       const pose = carPoses[i];
       if (!voice || !config || !pose) return;
       const throttleForVoice = config.controlled === 'input' ? voiceThrottle : state.v / TUNING.vmax;
+      // M13: table-x stereo panning is a TABLE-VIEW conceit — from behind the
+      // wheel (chase/cockpit) there's no left/right table axis, so pin both
+      // voices to center by feeding centerX (panForX(centerX,…) = 0).
+      const voiceX = effView === 'table' ? pose.x : session!.audioCenterX;
       voice.update({
         v: racing ? state.v : 0,
         throttle: racing ? throttleForVoice : 0,
-        x: pose.x,
+        x: voiceX,
         vmax: TUNING.vmax,
         tableHalfWidth: session!.audioHalfWidth,
         centerX: session!.audioCenterX,
@@ -889,6 +968,9 @@ function frame(timestamp: number): void {
             )
           : undefined,
         showGamepadHint: inputManager ? !inputManager.everSeenGamepad() : false,
+        // M13: camera view + cockpit ½×/1× — drives the small HUD badge.
+        cameraView: cameraRig?.mode(),
+        cockpitHalfSpeed: cameraRig ? !cameraRig.cockpitFullSpeed() : undefined,
       });
     }
 
@@ -1042,6 +1124,9 @@ function init(): void {
     calibrationOverlay = createCalibrationOverlay(canvasHost);
     replayBanner = createReplayBanner(canvasHost);
     qualityLadder = createQualityLadder(sceneHandle, quality);
+    // M13: the camera-view rig — only when real cars are rendered (the ?debug
+    // box view has no cockpit to sit in), so debug stays plain table framing.
+    if (!showDebug) cameraRig = createCameraRig(camera);
 
     // Fix round 1: the stats bar's left/right reserve depends on the real
     // layout of its neighbors, which a browser window resize can change
@@ -1063,6 +1148,9 @@ function init(): void {
       'wheel',
       (event) => {
         event.preventDefault();
+        // M13: wheel zoom is TABLE-MODE ONLY — in chase/cockpit the rig owns
+        // the camera distance, so a scroll must not fight it.
+        if (cameraRig && cameraRig.mode() !== 'table') return;
         zoomTarget = stepZoom(zoomTarget, event.deltaY, { pinch: event.ctrlKey });
       },
       { passive: false },
@@ -1094,6 +1182,12 @@ function init(): void {
       soundToggle = createSoundToggle(canvasHost, { initialOn: !muted, onToggle: toggleSound });
       menuButton = createMenuButton(canvasHost, abortToMenu);
       replayButton = createReplayButton(canvasHost, toggleReplay);
+      // M13: the VIEW button exists only when the camera rig does (real cars,
+      // not the ?debug box view). Seed its label from the rig's current view.
+      if (cameraRig) {
+        cameraButton = createCameraButton(canvasHost, cycleCameraView);
+        syncCameraButton();
+      }
       openMenu();
     });
   }
@@ -1152,6 +1246,14 @@ function init(): void {
     }
     if (event.code === 'KeyR') {
       toggleReplay();
+      return;
+    }
+    if (event.code === 'KeyC') {
+      cycleCameraView();
+      return;
+    }
+    if (event.code === 'KeyT') {
+      toggleCockpitSpeed();
       return;
     }
     if (event.code === 'BracketLeft' || event.code === 'BracketRight') {
