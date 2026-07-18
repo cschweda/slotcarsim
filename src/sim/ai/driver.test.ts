@@ -4,7 +4,7 @@ import { TUNING } from '../../config/tuning';
 import { createRng } from '../rng';
 import { buildTrack } from '../track/builder';
 import type { CarState } from '../types';
-import { createAiDriver, noiseAmplitude, reactionSeconds } from './driver';
+import { createAiDriver, noiseAmplitude, reactionSeconds, UNDERSHOOT_MULTIPLIER } from './driver';
 
 const DT = 1 / 120;
 const oval = buildTrack(TRACKS.oval.refs);
@@ -46,6 +46,17 @@ describe('noiseAmplitude(difficulty)', () => {
   it('is ±5% at d=1 and ±12% at d=0.35', () => {
     expect(noiseAmplitude(1)).toBeCloseTo(0.05, 12);
     expect(noiseAmplitude(0.35)).toBeCloseTo(0.12, 12);
+  });
+});
+
+describe('UNDERSHOOT_MULTIPLIER safety guard', () => {
+  // Undershoot must never invert into overshoot: both bounds must be < 1
+  // (scaled down from the profile target, never up) and > 0 (never zero).
+  it('bounds are > 0 and < 1 (safety: undershoot never becomes overshoot)', () => {
+    expect(UNDERSHOOT_MULTIPLIER[0]).toBeGreaterThan(0);
+    expect(UNDERSHOOT_MULTIPLIER[0]).toBeLessThan(1);
+    expect(UNDERSHOOT_MULTIPLIER[1]).toBeGreaterThan(0);
+    expect(UNDERSHOOT_MULTIPLIER[1]).toBeLessThan(1);
   });
 });
 

@@ -91,14 +91,16 @@ describe('headless AI — "not a robot": personality gives real lap-to-lap varia
   // penalty trivially clears 0.15s too, which is itself a valid (if blunter)
   // form of "not a robot".
   it.each([
-    [0.35, 1],
-    [0.65, 152],
-    [0.9, 381],
-    [1.0, 244],
-  ] as const)('difficulty %s, worldSeed %i: settled-lap spread >= 0.15s over 30 laps', (difficulty, seed) => {
+    [0.35, 1, 1],
+    [0.65, 152, 0],
+    [0.9, 381, 0],
+    [1.0, 244, 0],
+  ] as const)('difficulty %s, worldSeed %i: settled-lap spread >= 0.15s over 30 laps, deslots = %i', (difficulty, seed, expectedDeslots) => {
     const r = runAiLaps(difficulty, seed, 30);
     expect(r.lapCount).toBe(30);
     expect(r.lapSpread).toBeGreaterThanOrEqual(0.15);
+    // Pinned deslot count at this seed — guards the zero-deslot guarantee at d=0.9/381 and d=1.0/244.
+    expect(r.deslots).toBe(expectedDeslots);
   });
 });
 

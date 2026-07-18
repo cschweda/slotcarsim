@@ -74,7 +74,7 @@ const EVENT_DURATION = [0.35, 0.5] as const; // overshoot duration, seconds
 // (with margin) at every difficulty via a real, findable seed — see
 // headless.test.ts's "not a robot" pins for the exact (difficulty, seed)
 // pairs this was calibrated against.
-const UNDERSHOOT_MULTIPLIER = [0.78, 0.95] as const; // direct target multiplier (a 5–22% lift/early-brake)
+export const UNDERSHOOT_MULTIPLIER = [0.78, 0.95] as const; // direct target multiplier (a 5–22% lift/early-brake)
 const UNDERSHOOT_DURATION = [0.4, 0.8] as const; // seconds
 /** Fraction of triggered events that are undershoot rather than overshoot. */
 const UNDERSHOOT_WEIGHT = 0.6;
