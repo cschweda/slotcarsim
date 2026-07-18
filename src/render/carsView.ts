@@ -1,7 +1,7 @@
 import { CanvasTexture, Mesh, MeshBasicMaterial, PlaneGeometry, type Scene, type Texture } from 'three';
 import { TUNING } from '../config/tuning';
 import type { Track } from '../sim/track/builder';
-import type { LanePath } from '../sim/track/path';
+import type { LanePath, PathPoint } from '../sim/track/path';
 import { WHEEL_R_FRONT, WHEEL_R_REAR, WHEELBASE, buildCarBody, type CarBody, type CarStyleId } from './carMesh';
 
 // Renders the sim's cars with real AFX bodies: pin-guided chord orientation +
@@ -81,7 +81,7 @@ export type CarRenderPose =
     };
 
 /** How far into the tumble the exit-elevation fall completes (then the normal bounce curve applies at table level). */
-const TUMBLE_FALL_END = 0.4;
+export const TUMBLE_FALL_END = 0.4;
 
 // =====================================================================
 // Pure helpers (unit-tested in carsView.test.ts)
@@ -115,6 +115,47 @@ export function slotOrientation(lane: LanePath, s: number, slideYaw: number): Sl
   const rear = lane.pointAt(s - WHEELBASE).pos;
   const chordYaw = Math.atan2(pin.y - rear.y, pin.x - rear.x);
   return { pinX: pin.x, pinZ: -pin.y, rotationY: chordYaw + slideYaw, chordYaw };
+}
+
+export interface SlotElevation {
+  /** three-space ride height at the car's own lane offset, on the (possibly banked/elevated) surface. */
+  y: number;
+  /** Euler pitch term (nose tips up/down on a grade), radians — the Euler.Z slot, see below. */
+  gradePitch: number;
+  /** Euler roll term (car banks into the turn), radians — the Euler.X slot, see below. */
+  bankRoll: number;
+}
+
+/**
+ * M12: lifts the plan-view slot pose into 3D — the lane sample's bank/grade/z
+ * plus the car's own ride height at its lane offset on the surface. bank 0 /
+ * grade 0 / z 0 ⇒ gradePitch 0, bankRoll 0, y === ROADBED_TOP exactly
+ * (pre-M12 behavior, byte-identical).
+ *
+ * The ride height mirrors trackMesh.ts's worldPoint cross-section roll
+ * exactly (across = laneOffset, height = ROADBED_TOP, rolled by bankRoll) so
+ * the car sits ON the banked surface rather than floating or sinking.
+ *
+ * Axis note — the actual sign-sensitive part, see the pose-pipeline tests in
+ * carsView.test.ts: the car body's local +x is forward, +y is up, so +z is
+ * the lateral axis (module docblock above). This pose is applied as
+ * `group.rotation.set(bankRoll, yaw, gradePitch, 'YXZ')` (see update()
+ * below) — bankRoll in the Euler.X slot and gradePitch in the Euler.Z slot is
+ * what makes each term move the axis it is named for: bankRoll tilts the
+ * car's up vector toward the turn center without displacing the nose;
+ * gradePitch tips the nose vertically without perturbing the lateral tilt.
+ * Swapped (as this originally shipped), gradePitch loses its effect
+ * completely on every flat-bank graded piece — bank 0 ⇒ sin(0) = 0 cancels
+ * it outright — and bankRoll's tilt lands in the wrong plane (along the
+ * direction of travel rather than lateral to it). Caught by transforming
+ * actual nose/up vectors through this exact Euler construction, not by
+ * checking the formula against itself.
+ */
+export function slotElevation(pt: PathPoint, laneOffset: number): SlotElevation {
+  const bankRoll = -Math.sign(pt.curvature) * (pt.bank ?? 0);
+  const gradePitch = Math.atan(pt.grade ?? 0);
+  const y = (pt.z ?? 0) + laneOffset * Math.sin(bankRoll) + ROADBED_TOP * Math.cos(bankRoll);
+  return { y, gradePitch, bankRoll };
 }
 
 export interface TumbleTheatrics {
@@ -160,6 +201,17 @@ export function tumbleTheatrics(
     pitch: 0.64 * spin * air,
     roll: 0.4 * spin * air * Math.sign(yawRate || 1),
   };
+}
+
+/**
+ * M12: a car that flew off an elevated section starts at that height (exitZ)
+ * and falls to the table over the first TUMBLE_FALL_END of tumble progress,
+ * decaying linearly and monotonically; from TUMBLE_FALL_END on it is exactly
+ * 0 and the ordinary tumbleHeight bounce curve (table-relative) takes over.
+ * exitZ 0 ⇒ identically 0 for every progress (pre-M12 flat-track behavior).
+ */
+export function tumbleFallZ(exitZ: number, progress: number): number {
+  return exitZ * Math.max(0, 1 - progress / TUMBLE_FALL_END);
 }
 
 /** Forward arc-length hop a→b on a closed loop of length L, in [0, L). */
@@ -213,10 +265,7 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
 
       if (pose.mode === 'tumble') {
         const th = tumbleTheatrics(pose.progress, pose.phase, pose.yawRate);
-        // M12: a car that flew off an elevated section starts at that height and
-        // falls to the table over the first 40% of the tumble, then the ordinary
-        // bounce curve takes over at table level. exitZ 0 ⇒ pre-M12 behavior.
-        const fallZ = pose.exitZ * Math.max(0, 1 - pose.progress / TUMBLE_FALL_END);
+        const fallZ = tumbleFallZ(pose.exitZ, pose.progress);
         car.group.position.set(pose.x, ROADBED_TOP + th.height + fallZ, -pose.y);
         // yaw (flat spin) about world up, then pitch/roll in the car's frame.
         car.group.rotation.set(th.pitch, pose.yaw, th.roll, 'YXZ');
@@ -235,17 +284,11 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
       // roll into the bank, and a grade pitch. On a flat, unbanked lane every
       // term is 0 and this is exactly the pre-M12 pose (ROADBED_TOP, yaw only).
       const pt = lane.pointAt(pose.s);
-      const bankRoll = -Math.sign(pt.curvature) * (pt.bank ?? 0);
-      const gradePitch = -Math.atan(pt.grade ?? 0);
       const laneOffset = pose.lane === 0 ? TUNING.laneOffset : -TUNING.laneOffset;
-      // The car rides the banked roadbed at its own lane offset: roll the point
-      // (laneOffset, ROADBED_TOP) about the centerline and add the elevation z —
-      // the identical transform trackMesh's worldPoint uses, so wheels sit on the
-      // surface rather than floating above / sinking into a banked roadbed.
-      const baseY = (pt.z ?? 0) + laneOffset * Math.sin(bankRoll) + ROADBED_TOP * Math.cos(bankRoll);
-      car.group.position.set(ori.pinX, baseY, ori.pinZ);
-      car.group.rotation.set(gradePitch, ori.rotationY, bankRoll, 'YXZ');
-      blob?.position.set(ori.pinX, baseY + BLOB_SHADOW_PROUD, ori.pinZ);
+      const { y, gradePitch, bankRoll } = slotElevation(pt, laneOffset);
+      car.group.position.set(ori.pinX, y, ori.pinZ);
+      car.group.rotation.set(bankRoll, ori.rotationY, gradePitch, 'YXZ');
+      blob?.position.set(ori.pinX, y + BLOB_SHADOW_PROUD, ori.pinZ);
 
       // Spin the wheels by the distance actually travelled this frame, but only
       // when we're continuous with the previous frame (same generation).
