@@ -35,8 +35,9 @@ import { createSim } from './sim/world';
 import { createDebugPanel } from './ui/debugPanel';
 import { createHud } from './ui/hud';
 import { createMenuSystem, createStartGate } from './ui/menus';
-import type { CalibrationOverlay, CountdownOverlay } from './ui/overlays';
-import { createCalibrationOverlay, createCountdownOverlay } from './ui/overlays';
+import type { CalibrationOverlay, CountdownOverlay, SoundToggle } from './ui/overlays';
+import { createCalibrationOverlay, createCountdownOverlay, createSoundToggle } from './ui/overlays';
+import { loadSoundPref, saveSoundPref } from './ui/soundPref';
 
 /** Pace/AI motor voices detune +26 cents (~+1.5%) above the player's 0. */
 const PACE_DETUNE_CENTS = 26;
@@ -84,13 +85,22 @@ let debugPanel: ReturnType<typeof createDebugPanel> | undefined;
 let menu: ReturnType<typeof createMenuSystem> | undefined;
 let countdown: CountdownOverlay | undefined;
 let calibrationOverlay: CalibrationOverlay | undefined;
+/** Persistent top-right SOUND: ON/OFF button — created once the start gate is dismissed (see init()'s createStartGate callback), then kept for the rest of the session. */
+let soundToggle: SoundToggle | undefined;
 /** Rolling frame-time monitor that steps DPR/shadow quality down under sustained load and back up under sustained headroom (never above ?quality). */
 let qualityLadder: ReturnType<typeof createQualityLadder> | undefined;
 
 // Audio: created only inside the start gate's real user-gesture handler.
 let engine: AudioEngine | undefined;
 let sfx: Sfx | undefined;
-let muted = false;
+/**
+ * Sound defaults OFF (this placeholder is overwritten from the persisted
+ * preference early in init() — see `muted = !loadSoundPref()` — before the
+ * start gate can ever be dismissed, so this literal is never actually
+ * observed; it's set to the spec'd default here purely so this declaration
+ * doesn't itself lie about that default if anything ever reads it earlier).
+ */
+let muted = true;
 
 /** Reference track bbox half-extents (the oval's), so the camera frames every track with the same established margin. */
 let refHalfExtent = { x: 0, y: 0 };
@@ -204,6 +214,20 @@ function attachVoices(): void {
   session.motorVoices = session.carConfigs.map((c) =>
     createMotorVoice(engine!, { detuneCents: c.controlled !== 'input' ? PACE_DETUNE_CENTS : 0 }),
   );
+}
+
+/** Applies the current `muted` flag to the live engine's master gain via the existing glide (never a raw `.value=` jump, to avoid a click). Called once right after the engine is constructed — which always starts unmuted (`master.gain.value = MASTER_GAIN` in audio/engine.ts) regardless of the loaded preference — and again on every toggleSound(). */
+function applyMuted(): void {
+  if (!engine) return;
+  engine.master.gain.setTargetAtTime(muted ? 0 : MASTER_GAIN, engine.ctx.currentTime, MUTE_RAMP_TAU);
+}
+
+/** Flips `muted`, applies it, and persists the choice. The single path both the 'M' key and the corner button's click funnel through, so the two can never disagree about the current state — each call ends by pushing the new state back to the button via soundToggle.set(). */
+function toggleSound(): void {
+  muted = !muted;
+  applyMuted();
+  saveSoundPref(!muted);
+  soundToggle?.set(!muted);
 }
 
 function openMenu(): void {
@@ -469,7 +493,6 @@ function frame(timestamp: number): void {
         bestLapSec: race.playerBestLapSec(),
         throttle: pendingInput.throttle,
         sourceLabel: inputManager ? inputManager.activeSourceLabel() : '',
-        muted,
         lapTarget: isRace ? session.config.lapsToWin : undefined,
         opponentLap: isRace ? race.laps(AI_CAR_INDEX) : undefined,
         position: isRace
@@ -556,6 +579,12 @@ function init(): void {
     refHalfExtent = { x: ovalBBox.hx, y: ovalBBox.hy };
     if (showDebug) addGroundPlane();
 
+    // Default-off sound preference, read once up front — independent of the
+    // audio engine's own lifecycle (that doesn't exist until the gate is
+    // dismissed) so both the gate's copy and the corner button's initial
+    // label are correct on the very first paint.
+    muted = !loadSoundPref();
+
     inputManager = createInputManager();
     hud = createHud(document.body);
     debugPanel = createDebugPanel(TUNING);
@@ -568,12 +597,14 @@ function init(): void {
     buildSession(DEFAULT_CONFIG);
 
     // The one valid place to unlock WebAudio — then straight into the menu.
-    createStartGate(document.body, () => {
+    createStartGate(document.body, !muted, () => {
       const newEngine = createAudioEngine();
       newEngine.ensureRunning();
       engine = newEngine;
       sfx = createSfx(newEngine);
       attachVoices(); // the default session predates audio; give it voices now
+      applyMuted(); // silence the fresh (always-unmuted-by-construction) engine if the loaded/default preference is off
+      soundToggle = createSoundToggle(document.body, { initialOn: !muted, onToggle: toggleSound });
       openMenu();
     });
   }
@@ -614,8 +645,7 @@ function init(): void {
       return;
     }
     if (event.code === 'KeyM' && engine) {
-      muted = !muted;
-      engine.master.gain.setTargetAtTime(muted ? 0 : MASTER_GAIN, engine.ctx.currentTime, MUTE_RAMP_TAU);
+      toggleSound();
     }
   });
 }
