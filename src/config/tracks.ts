@@ -47,4 +47,41 @@ export const TRACKS = {
       { piece: 'straight4half' },
     ] satisfies PieceRef[],
   },
+  daytonaSweep: {
+    name: 'Daytona Sweep',
+    // A speedway: an oval with BOTH 180° ends banked 30° (0.5236 rad) into the
+    // turn, and a back stretch that climbs over an elevated bridge and returns.
+    // Plan-view it is a 48"-straight oval (both long straights 48" so it closes
+    // in x/y exactly like the classic oval, just longer for a faster-feeling
+    // ~3.87 m lap); banking is a cross-section roll that leaves the centerline
+    // geometry untouched, and the bridge's rise nets to 0 around the loop.
+    //
+    // Both ends turn the SAME way (left) — a real speedway — so the inner lane
+    // (lane 0) is genuinely shorter/faster, an authentic inner-lane advantage
+    // (noted in the menu's lane labels and the README).
+    //
+    // Banking raises the deslot speed at each end from ~1.52 m/s (flat 9" inner
+    // lane) to ~1.96 m/s, so full throttle survives the ends that would spit a
+    // car off the flat oval; the downhill into the second banked end is where
+    // the AI/coach must brake early (the grade term in the speed profile).
+    refs: [
+      // Front straight (flat), 48".
+      { piece: 'straight15' },
+      { piece: 'straight15' },
+      { piece: 'straight9' },
+      { piece: 'straight9' },
+      // Banked 180° end.
+      { piece: 'curve9_90', dir: 'left', bank: 0.5236 },
+      { piece: 'curve9_90', dir: 'left', bank: 0.5236 },
+      // Back stretch, 48": ramp up (¾"), elevated plateau (flat at +19 mm),
+      // ramp down (¾") — net rise 0, but the whole loop is validated in z.
+      { piece: 'straight9', rise: 0.019 },
+      { piece: 'straight15' },
+      { piece: 'straight15' },
+      { piece: 'straight9', rise: -0.019 },
+      // Second banked 180° end.
+      { piece: 'curve9_90', dir: 'left', bank: 0.5236 },
+      { piece: 'curve9_90', dir: 'left', bank: 0.5236 },
+    ] satisfies PieceRef[],
+  },
 } as const;

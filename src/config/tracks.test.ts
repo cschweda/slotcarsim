@@ -55,3 +55,59 @@ describe('figure8 — the criss-cross', () => {
     expect(built.lanes[0].totalLength).toBeLessThan(3.5);
   });
 });
+
+describe('daytonaSweep — banked speedway with an elevated back stretch', () => {
+  const built = buildTrack(TRACKS.daytonaSweep.refs);
+
+  it('closes in x/y/heading AND elevation (net-zero rise around the loop)', () => {
+    expect(() => buildTrack(TRACKS.daytonaSweep.refs)).not.toThrow();
+  });
+
+  it('is a longer, faster-feeling lap in the 3.5–4.5 m range', () => {
+    expect(built.lanes[0].totalLength).toBeGreaterThan(3.5);
+    expect(built.lanes[0].totalLength).toBeLessThan(4.5);
+  });
+
+  it('keeps the inner-lane advantage (both ends turn the same way, like the oval)', () => {
+    expect(built.lanes[0].totalLength).toBeLessThan(built.lanes[1].totalLength);
+    // Both ends left: one net full turn, so the analytic 4π·d lane-length gap.
+    const diff = built.lanes[1].totalLength - built.lanes[0].totalLength;
+    expect(diff).toBeCloseTo(4 * Math.PI * 0.01905, 6);
+  });
+
+  it('both 180° ends are banked 30° (0.5236 rad) into the turn', () => {
+    // Sample every 10 mm; the banked samples should all read +0.5236 and the
+    // flat samples 0. At least a meaningful fraction is banked (the two ends).
+    const lane = built.lanes[0];
+    let bankedSamples = 0;
+    let maxBank = 0;
+    for (let s = 0; s < lane.totalLength; s += 0.01) {
+      const b = lane.pointAt(s).bank ?? 0;
+      if (b !== 0) {
+        bankedSamples += 1;
+        expect(b).toBeCloseTo(0.5236, 9); // constant per piece, into the turn
+        maxBank = Math.max(maxBank, b);
+      }
+    }
+    expect(maxBank).toBeCloseTo(0.5236, 9);
+    expect(bankedSamples).toBeGreaterThan(20); // the two banked ends are a real span
+  });
+
+  it('has an elevated back stretch that rises above the table and returns to it', () => {
+    const lane = built.lanes[0];
+    let maxZ = 0;
+    let sawUphill = false;
+    let sawDownhill = false;
+    for (let s = 0; s < lane.totalLength; s += 0.01) {
+      const p = lane.pointAt(s);
+      maxZ = Math.max(maxZ, p.z ?? 0);
+      if ((p.grade ?? 0) > 0) sawUphill = true;
+      if ((p.grade ?? 0) < 0) sawDownhill = true;
+    }
+    expect(maxZ).toBeCloseTo(0.019, 3); // the plateau sits ~19 mm up (one riser)
+    expect(sawUphill).toBe(true);
+    expect(sawDownhill).toBe(true);
+    // Start/finish is at table level (loop closed in z).
+    expect(lane.pointAt(0).z ?? 0).toBe(0);
+  });
+});
