@@ -4,8 +4,9 @@ A photorealistic, browser-based simulation of 1970s Aurora AFX HO-scale slot car
 
 ## Features
 
-- Two track layouts — Classic Oval and a criss-cross Figure Eight — built from authentic AFX track-piece primitives, with two independent lanes.
+- Three track layouts — Classic Oval, a criss-cross Figure Eight, and the banked **Daytona Sweep** speedway — built from authentic AFX track-piece primitives, with two independent lanes.
 - Drivable cars: authentic AFX motor/brake response curve, cornering and deslot physics (slide, tumble, re-slot), procedural 1970s AFX-style bodies, liveries, chrome, and tinted canopies.
+- Banked curves and elevation that do real work: a banked corner genuinely raises the speed you can carry (gravity helps hold the car in — a 30° bank lifts the 9″ inner-lane deslot speed from ~1.5 to ~2.0 m/s), and a hill genuinely slows the climb and speeds the descent. The AI and the coach both plan against the same banked/graded limits.
 - Fully synthesized WebAudio motor sound (no samples), pitch-mapped to speed.
 - An AI opponent with adjustable difficulty, and a full race mode with lap timing (plus a solo Time Trial mode).
 - Gamepad (analog trigger, with an auto-calibration wizard and rumble) and keyboard input — see [Controls](#controls) below.
@@ -35,7 +36,7 @@ This is a proof of concept, not a finished commercial game. See the [design doc]
 ## Modes
 
 - **Practice** — the beginner path: no lap target, no pressure, unlimited laps tracking your best. Optionally add an AI car for company (`Company: AI car`, with its own Easy/Medium/Hard) — it just circulates alongside you, with no win condition.
-- **Race vs AI** — first to 5 laps against a computer opponent (Easy/Medium/Hard), on the Classic Oval or the criss-cross Figure Eight.
+- **Race vs AI** — first to 5 laps against a computer opponent (Easy/Medium/Hard), on the Classic Oval, the criss-cross Figure Eight, or the banked Daytona Sweep. The Daytona Sweep is a speedway: both 180° ends turn the same way and are banked into the turn, so — as on a real oval — the shorter inner lane keeps a genuine advantage.
 - **Time Trial** — solo, unlimited laps, tracking your best lap time.
 
 ## Practice & assists
