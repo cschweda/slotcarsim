@@ -1,4 +1,13 @@
-import { CanvasTexture, Mesh, MeshBasicMaterial, PlaneGeometry, type Scene, type Texture } from 'three';
+import {
+  CanvasTexture,
+  Mesh,
+  MeshBasicMaterial,
+  PlaneGeometry,
+  type Quaternion,
+  type Scene,
+  type Texture,
+  type Vector3,
+} from 'three';
 import { TUNING } from '../config/tuning';
 import type { Track } from '../sim/track/builder';
 import type { LanePath, PathPoint } from '../sim/track/path';
@@ -223,10 +232,30 @@ function forwardDelta(a: number, b: number, L: number): number {
 // View
 // =====================================================================
 
+/** A car's live render transform, for the M13 camera rig to anchor chase/cockpit to the SAME pose update() applied. */
+export interface CarAnchor {
+  /** World position of the car's group origin — the guide pin (world = local; the group is a direct scene child). */
+  position: Vector3;
+  /** World orientation — the full pin-guided 3D pose (bank roll / grade pitch / slide yaw baked in). */
+  quaternion: Quaternion;
+}
+
 export interface CarsView {
   update(poses: CarRenderPose[]): void;
   /** M8 auto quality ladder: show/hide the cheap blob-shadow fallback (its rock-bottom, shadows-off tier). */
   setBlobShadows(enabled: boolean): void;
+  /** M13: the car's live group transform (call AFTER update()), for the camera rig — null if that car index doesn't exist. Returns the group's own live position/quaternion refs (read-only; valid until the next update()). */
+  carAnchor(index: number): CarAnchor | null;
+  /**
+   * M13: fully hide (true) or restore (false) a car's entire mesh — for
+   * TRUE first-person cockpit, the player must see ZERO of their own car
+   * (no body, canopy, chassis, wheels, chrome, pin, or cast shadow) at any
+   * angle on flat OR banked/graded track. Toggles the group's visibility
+   * flag; update() keeps writing the group transform regardless, so
+   * carAnchor() stays live while hidden and the car reappears completely the
+   * instant this is called with false (mode change / deslot snap-to-table).
+   */
+  setBodyHidden(index: number, hidden: boolean): void;
   dispose(): void;
 }
 
@@ -307,6 +336,26 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
     for (const blob of blobShadows) blob.visible = enabled;
   }
 
+  function carAnchor(index: number): CarAnchor | null {
+    const car = cars[index];
+    if (!car) return null;
+    // The group is added directly to the scene (identity parent), so its local
+    // position/quaternion ARE world-space — exactly the transform update() just
+    // wrote. No recomputation, no matrixWorld walk.
+    return { position: car.group.position, quaternion: car.group.quaternion };
+  }
+
+  function setBodyHidden(index: number, hidden: boolean): void {
+    const car = cars[index];
+    if (!car) return;
+    // Hide the ENTIRE car group (three skips an invisible subtree, cast shadow
+    // included) — TRUE first person shows none of the player's own car. The
+    // group transform still updates each frame (update() ignores visibility),
+    // so carAnchor() stays live and the car reappears in full the moment this
+    // is set back to visible.
+    car.group.visible = !hidden;
+  }
+
   function dispose(): void {
     for (const car of cars) {
       scene.remove(car.group);
@@ -320,5 +369,5 @@ export function createCarsView(scene: Scene, track: Track, styles: CarStyleId[])
     // NOT disposed here.
   }
 
-  return { update, setBlobShadows, dispose };
+  return { update, setBlobShadows, carAnchor, setBodyHidden, dispose };
 }

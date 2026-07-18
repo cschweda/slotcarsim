@@ -260,6 +260,68 @@ describe('tumbleFallZ — elevated exit-height decay theatrics', () => {
   });
 });
 
+// =====================================================================
+// M13: the camera-rig accessors — the SHARED anchor + cockpit self-hiding
+// =====================================================================
+
+describe('carAnchor — the shared pose the camera rig reads', () => {
+  it('returns the player group\'s own live position/quaternion after update(), and null for a missing car', () => {
+    const scene = new Scene();
+    const view = createCarsView(scene, track, ['p917']);
+    const pose: CarRenderPose = { mode: 'slot', s: S_MID, slideYaw: 0.2, lane: 0, generation: 0 };
+    view.update([pose]);
+
+    const group = scene.children.find((o) => o.name === 'car-p917')!;
+    const anchor = view.carAnchor(0);
+    expect(anchor).not.toBeNull();
+    // Same refs the group carries — no recomputation, no copy that could drift.
+    expect(anchor!.position).toBe(group.position);
+    expect(anchor!.quaternion).toBe(group.quaternion);
+
+    expect(view.carAnchor(5)).toBeNull();
+    view.dispose();
+  });
+});
+
+describe('setBodyHidden — TRUE first-person cockpit hides the WHOLE player car', () => {
+  it('hides the entire player group (nothing of their own car renders) and restores it fully — the AI car is never touched', () => {
+    const scene = new Scene();
+    const view = createCarsView(scene, track, ['p917', 'f512']);
+    const player = scene.children.find((o) => o.name === 'car-p917')!;
+    const ai = scene.children.find((o) => o.name === 'car-f512')!;
+
+    // Cockpit: the whole player group goes invisible → three skips the entire
+    // subtree (body, canopy, chassis, wheels, chrome, pin, cast shadow).
+    view.setBodyHidden(0, true);
+    expect(player.visible).toBe(false);
+    expect(ai.visible).toBe(true); // opponent stays fully visible
+
+    // Restore (cycle to chase/table, or the deslot snap): reappears in full.
+    view.setBodyHidden(0, false);
+    expect(player.visible).toBe(true);
+    expect(ai.visible).toBe(true);
+    view.dispose();
+  });
+
+  it('keeps the anchor LIVE while hidden — update() still writes the transform, so the follow camera does not freeze', () => {
+    const scene = new Scene();
+    const view = createCarsView(scene, track, ['p917']);
+    view.setBodyHidden(0, true); // cockpit: player group invisible
+
+    view.update([{ mode: 'slot', s: S_MID, slideYaw: 0, lane: 0, generation: 0 }]);
+    const a1 = view.carAnchor(0)!;
+    const p1 = a1.position.clone();
+    // A later frame at a different s must move the (still-invisible) anchor.
+    view.update([{ mode: 'slot', s: S_MID + 0.1, slideYaw: 0, lane: 0, generation: 0 }]);
+    const p2 = view.carAnchor(0)!.position;
+
+    const group = scene.children.find((o) => o.name === 'car-p917')!;
+    expect(group.visible).toBe(false); // still hidden…
+    expect(p1.distanceTo(p2)).toBeGreaterThan(1e-4); // …but the anchor tracked the car
+    view.dispose();
+  });
+});
+
 /** The exact center of lane 0's first arc segment, for the turn-center check. */
 function firstArcSegment(): { center: { x: number; y: number } } {
   // Reconstruct the same segment list buildTrack made for lane 0 by walking to
@@ -324,10 +386,16 @@ describe('carsView.update() — real rotation.set(bankRoll, yaw, gradePitch, YXZ
       },
     ]);
 
-    // Wrap into a Track-like object with a single lane at index 0.
+    // Wrap into a Track-shaped object. Track requires a 2-lane tuple; both
+    // lanes share the same banked+graded path here (only lane 0 is driven).
+    const laneLen = R * (Math.PI / 2);
     const stubTrack: Track = {
-      lanes: [bankedGradedLane],
-      pieceBoundaries: [[0, R * (Math.PI / 2)]],
+      lanes: [bankedGradedLane, bankedGradedLane],
+      pieceBoundaries: [
+        [0, laneLen],
+        [0, laneLen],
+      ],
+      pieces: [],
     };
 
     return { track: stubTrack, laneIndex: 0 };
@@ -358,7 +426,7 @@ describe('carsView.update() — real rotation.set(bankRoll, yaw, gradePitch, YXZ
     view.update([pose]);
 
     // Read back the car's actual rotation from the group.
-    const carGroup = scene.children[0]; // First added child is car 0's group.
+    const carGroup = scene.children[0]!; // First added child is car 0's group.
     expect(carGroup).toBeDefined();
 
     // Transform nose and up through the applied rotation.
