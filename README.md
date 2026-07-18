@@ -25,13 +25,23 @@ This is a proof of concept, not a finished commercial game. See the [design doc]
 - **Keyboard** (fallback, always available): `Space` or `↑` is throttle — hold to ramp up like squeezing a trigger, release to brake instantly.
 - **Sound** — off by default. A persistent `SOUND: ON`/`SOUND: OFF` button in the top-right corner (visible in every screen after the start gate) toggles it; `M` is the keyboard shortcut and always stays in sync with the button. The choice is remembered (`localStorage`) across reloads.
 - **Mouse wheel** — zoom the track view in/out (trackpad pinch works too). Resets to the fitted default on every race/track rebuild.
-- **`Esc`** — abort the current race and return to the menu.
+- **`Esc`** (or the on-screen **MENU** button, top-right, visible while a race is live) — abort the current race and return to the menu.
+- **`[` / `]`** — in Practice mode only, step the Stickiness grip assist down/up while driving; the HUD flashes the new level's name for a moment.
 - Menus: `↑`/`↓` choose a row, `←`/`→` change its value, `Enter` confirm/start.
 
 ## Modes
 
+- **Practice** — the beginner path: no lap target, no pressure, unlimited laps tracking your best. Optionally add an AI car for company (`Company: AI car`, with its own Easy/Medium/Hard) — it just circulates alongside you, with no win condition.
 - **Race vs AI** — first to 5 laps against a computer opponent (Easy/Medium/Hard), on the Classic Oval or the criss-cross Figure Eight.
 - **Time Trial** — solo, unlimited laps, tracking your best lap time.
+
+## Practice & assists
+
+The authentic AFX handling model is unforgiving by design — Aurora's own 1970s cars deslot constantly at speed. Three optional features make it approachable without touching the underlying physics:
+
+- **Practice mode** (see [Modes](#modes) above) defaults Stickiness to `Sticky` and the Coach to `On`, so a first-time player lands in the most forgiving setup automatically.
+- **Stickiness** — a `Stickiness` row in every mode's setup menu scales the car's cornering grip limits: `Authentic AFX` (the real, unassisted physics) → `Sticky` → `Magna-Traction` → `Training Glue`. `Magna-Traction` deliberately matches Aurora's own historical Magna-Traction grip figures, making that once-legendary "cheat" tire technology genuinely, playably faster through a corner rather than just a stat on a package; `Training Glue` goes well beyond it for absolute beginners. In Race vs AI the setting applies equally to both cars (the AI's own driving adapts to it automatically), so it stays a fair contest.
+- **Throttle coach** — a small `COACH` gauge next to the throttle bar (toggle it with the `Coach` menu row) reads the track ahead and lights up ▲ GO / ● HOLD / ▼ BRAKE in real time, with a headroom gauge underneath — a live "lift now" cue for the exact corner you're approaching, at whatever Stickiness level you've chosen.
 
 ## Requirements
 
