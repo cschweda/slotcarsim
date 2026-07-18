@@ -20,7 +20,7 @@ import type { SimEvent } from '../sim/types';
  */
 export type RaceMode = 'practice' | 'timetrial' | 'race';
 export type RacePhase = 'idle' | 'countdown' | 'racing' | 'finished';
-export type TrackId = 'oval' | 'figure8';
+export type TrackId = 'oval' | 'figure8' | 'daytonaSweep';
 /** Practice-only: an optional AI car circulating alongside the player, purely as company — never a win condition. Ignored outside practice. */
 export type PracticeCompanion = 'alone' | 'ai';
 

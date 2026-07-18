@@ -200,6 +200,7 @@ const DIFFICULTIES: Array<{ value: number; label: string }> = [
 const TRACKS_OPT: Array<{ value: TrackId; label: string }> = [
   { value: 'oval', label: 'Classic Oval' },
   { value: 'figure8', label: 'Figure Eight' },
+  { value: 'daytonaSweep', label: 'Daytona Sweep' },
 ];
 const CARS: Array<{ value: CarStyleId; label: string }> = [
   { value: 'p917', label: '917 Orange' },
@@ -208,6 +209,9 @@ const CARS: Array<{ value: CarStyleId; label: string }> = [
 const LANE_LABELS: Record<TrackId, [string, string]> = {
   oval: ['Inner', 'Outer'],
   figure8: ['Lane 1', 'Lane 2'],
+  // Speedway: both banked ends turn the same way, so the inner lane is genuinely
+  // shorter/faster — an authentic inner-lane advantage.
+  daytonaSweep: ['Inner', 'Outer'],
 };
 /** Practice-only "Company" row: race alone, or with an AI pace car for company (no win condition either way). */
 const COMPANIONS: Array<{ value: PracticeCompanion; label: string }> = [
