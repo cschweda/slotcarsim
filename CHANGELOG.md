@@ -12,11 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Persistent sound toggle (`src/ui/overlays.ts`'s `createSoundToggle`): a top-right `SOUND: ON`/`SOUND: OFF` button, `aria-pressed` + `aria-label`, visible in every screen after the start gate (menu, countdown, racing, results) via a z-index above the menu system's full-screen dialogs. Clicking it and pressing `M` both funnel through the same `main.ts` toggle path, so the two can never disagree about the current state.
 - Sound preference persistence (`src/ui/soundPref.ts`): `loadSoundPref()`/`saveSoundPref()` read/write `localStorage` key `afx-sound` (`'on'`/`'off'`); any missing, corrupt, or unrecognized stored value reads back as `false`.
 - Visible keyboard controls listing: the start gate's old single hint line is replaced with a two-column block (throttle, sound, menu/abort, menu navigation, gamepad) for players without a gamepad; the race setup menu's footer gains a matching one-line reminder (`Space/↑ = throttle · M = sound · Esc = abort`).
+- Mouse-wheel/trackpad-pinch camera zoom (`src/render/cameraZoom.ts`): scroll to zoom the track view in/out (0.35×–1.15× the fitted framing — closer on the figure-8, where cars used to read small), smoothed via a frame-rate-independent exponential ease. Wheel input is captured on the canvas host only, so scrolling the docked tuning panel's own content is unaffected; zoom resets to the fitted default on every race/track rebuild.
 
 ### Changed
 
 - Sound now defaults to **off** (was on): `main.ts`'s `muted` flag initializes from the persisted preference (`!loadSoundPref()`) instead of always starting unmuted. The start gate shows a truthful one-line summary of the current state ("Sound is off — press M or use the Sound button to enable" / "Sound on").
 - HUD (`src/ui/hud.ts`): the small "MUTED" badge is removed — the persistent sound toggle button now carries that state, so the HUD no longer duplicates it.
+- Dev tuning panel (`src/ui/debugPanel.ts`): docks as a collapsible right-hand column next to the track view instead of overlaying it (`?tune`/dev only) — you can race with it open. A header close button collapses it (the canvas reflows to fill the freed width); a small `TUNE` tab reopens it.
 
 ## [0.1.0] - 2026-07-18
 

@@ -16,6 +16,7 @@ import { createInputManager } from './input/inputManager';
 import { DEFAULT_DT, createLoop } from './loop';
 import type { CarRenderPose, CarsView } from './render/carsView';
 import { createCarsView } from './render/carsView';
+import { ZOOM_DEFAULT, approachZoom, stepZoom } from './render/cameraZoom';
 import type { CarPose, DebugView } from './render/debugView';
 import { createDebugView } from './render/debugView';
 import type { Environment } from './render/environment';
@@ -77,6 +78,21 @@ let keyLight!: ReturnType<typeof createScene>['keyLight'];
 let render!: ReturnType<typeof createScene>['render'];
 /** ?debug — reframeCamera and buildSession both branch on it. */
 let showDebug = false;
+
+/**
+ * The current track's "unzoomed" camera framing: the lookAt point and the
+ * already-per-track-scaled CAM_OFFSET (see reframeCamera). Stored (rather
+ * than applied once) so the per-frame zoom multiplier can be re-applied every
+ * frame without redoing the bbox/scale math — see applyCameraFraming().
+ */
+interface CameraFraming {
+  lookAt: { x: number; y: number; z: number };
+  offset: { x: number; y: number; z: number };
+}
+let cameraFraming: CameraFraming | undefined;
+/** Mouse-wheel/pinch zoom (render/cameraZoom.ts): the wheel-driven goal and the smoothed live value applied to the camera each frame. Both reset to ZOOM_DEFAULT on every session/track rebuild — see reframeCamera(). */
+let zoomTarget = ZOOM_DEFAULT;
+let zoomCurrent = ZOOM_DEFAULT;
 
 // ---- Persistent (across races) ------------------------------------------
 let inputManager: ReturnType<typeof createInputManager> | undefined;
@@ -290,20 +306,48 @@ function computeTrackBBox(track: Track): TrackBBox {
  * fits every other track's true footprint with the same established margin.
  * Height (offset.y) scales by the larger of the two ratios, so the camera
  * pulls back enough to cover whichever axis grew the most.
+ *
+ * Stores the result as `cameraFraming` (lookAt + the scaled offset) rather
+ * than setting `camera.position` directly — `applyCameraFraming()` does that,
+ * scaled by the live mouse-wheel zoom multiplier, every frame. Also resets
+ * the zoom to ZOOM_DEFAULT: a session/track rebuild is exactly the brief's
+ * "reset zoom on every session/track rebuild" trigger (this is the only
+ * place buildSession calls into camera framing).
  */
 function reframeCamera(bbox: TrackBBox): void {
   const scaleX = refHalfExtent.x > 0 ? bbox.hx / refHalfExtent.x : 1;
   const scaleY = refHalfExtent.y > 0 ? bbox.hy / refHalfExtent.y : 1;
   const scaleUp = Math.max(scaleX, scaleY);
-  const tx = bbox.cx;
-  const ty = -0.02;
-  const tz = -bbox.cy; // sim (x, y) → three (x, ·, −y)
   camera.fov = showDebug ? 45 : 38;
   camera.near = 0.05;
   camera.far = 20;
-  camera.position.set(tx + CAM_OFFSET.x * scaleX, ty + CAM_OFFSET.y * scaleUp, tz + CAM_OFFSET.z * scaleY);
-  camera.lookAt(tx, ty, tz);
   camera.updateProjectionMatrix();
+  cameraFraming = {
+    lookAt: { x: bbox.cx, y: -0.02, z: -bbox.cy }, // sim (x, y) → three (x, ·, −y)
+    offset: { x: CAM_OFFSET.x * scaleX, y: CAM_OFFSET.y * scaleUp, z: CAM_OFFSET.z * scaleY },
+  };
+  zoomTarget = ZOOM_DEFAULT;
+  zoomCurrent = ZOOM_DEFAULT;
+  applyCameraFraming();
+}
+
+/**
+ * Sets `camera.position`/`lookAt` from `cameraFraming`, scaling the offset's
+ * length by `zoomCurrent` (1.0 = the fitted framing reframeCamera computed;
+ * smaller = zoomed in/closer, larger = zoomed out). Called once by
+ * reframeCamera() and again every frame thereafter as `zoomCurrent` eases
+ * toward `zoomTarget` (see frame()) — cheap (position/lookAt only, no
+ * updateProjectionMatrix — zoom never changes fov/aspect/clipping).
+ */
+function applyCameraFraming(): void {
+  if (!cameraFraming) return;
+  const { lookAt, offset } = cameraFraming;
+  camera.position.set(
+    lookAt.x + offset.x * zoomCurrent,
+    lookAt.y + offset.y * zoomCurrent,
+    lookAt.z + offset.z * zoomCurrent,
+  );
+  camera.lookAt(lookAt.x, lookAt.y, lookAt.z);
 }
 
 function readQuality(value: string | null): Quality {
@@ -401,6 +445,13 @@ function frame(timestamp: number): void {
   if (lastTimestamp !== undefined && session) {
     const dtFrame = (timestamp - lastTimestamp) / 1000;
     qualityLadder?.sample(dtFrame * 1000);
+
+    // Ease the live zoom toward the wheel-driven target every frame,
+    // independent of race phase — zoom works in the menu/countdown too, not
+    // just mid-race.
+    zoomCurrent = approachZoom(zoomCurrent, zoomTarget, dtFrame);
+    applyCameraFraming();
+
     const phase = session.race.phase();
 
     // Outside a race (menu, countdown), poll the gamepad directly (never the
@@ -623,6 +674,24 @@ function init(): void {
     countdown = createCountdownOverlay(canvasHost);
     calibrationOverlay = createCalibrationOverlay(canvasHost);
     qualityLadder = createQualityLadder(sceneHandle, quality);
+
+    // Mouse-wheel/trackpad-pinch zoom (render/cameraZoom.ts). Listens on
+    // canvasHost SPECIFICALLY (never window/document) — canvasHost and the
+    // docked tuning panel column are siblings, not ancestor/descendant, so a
+    // wheel event over the panel (scrolling its own overflow-y content)
+    // never reaches this listener at all; nothing needs to explicitly
+    // exclude it. `passive: false` + preventDefault() stops the browser's
+    // own page-scroll/ctrl-wheel-zoom over the canvas. Trackpad pinch
+    // gestures arrive as wheel events with ctrlKey set — treated the same,
+    // just more sensitive (stepZoom's `pinch` option).
+    canvasHost.addEventListener(
+      'wheel',
+      (event) => {
+        event.preventDefault();
+        zoomTarget = stepZoom(zoomTarget, event.deltaY, { pinch: event.ctrlKey });
+      },
+      { passive: false },
+    );
 
     // A static default session sits behind the gate/menu so the table isn't empty.
     buildSession(DEFAULT_CONFIG);

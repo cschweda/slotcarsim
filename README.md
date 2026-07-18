@@ -24,6 +24,7 @@ This is a proof of concept, not a finished commercial game. See the [design doc]
 - **Gamepad** (preferred whenever one is connected): the analog trigger is throttle. The first time an unfamiliar controller is used, a 5-second calibration wizard runs automatically ("SQUEEZE AND RELEASE THE TRIGGER") to find and measure its active control; the result is remembered (`localStorage`) so it only happens once per controller. Force a re-run with `?calibrate`. Deslotting gives a strong rumble pulse and reslotting a light one, on gamepads that support it.
 - **Keyboard** (fallback, always available): `Space` or `↑` is throttle — hold to ramp up like squeezing a trigger, release to brake instantly.
 - **Sound** — off by default. A persistent `SOUND: ON`/`SOUND: OFF` button in the top-right corner (visible in every screen after the start gate) toggles it; `M` is the keyboard shortcut and always stays in sync with the button. The choice is remembered (`localStorage`) across reloads.
+- **Mouse wheel** — zoom the track view in/out (trackpad pinch works too). Resets to the fitted default on every race/track rebuild.
 - **`Esc`** — abort the current race and return to the menu.
 - Menus: `↑`/`↓` choose a row, `←`/`→` change its value, `Enter` confirm/start.
 
