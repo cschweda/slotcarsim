@@ -561,6 +561,14 @@ function frame(timestamp: number): void {
         muted,
         lapTarget: isRace ? session.config.lapsToWin : undefined,
         opponentLap: isRace ? race.laps(AI_CAR_INDEX) : undefined,
+        position: isRace
+          ? racePosition(
+              race.laps(PLAYER_CAR_INDEX),
+              currStates[PLAYER_CAR_INDEX]!.s,
+              race.laps(AI_CAR_INDEX),
+              currStates[AI_CAR_INDEX]!.s,
+            )
+          : undefined,
       });
     }
 
@@ -576,6 +584,17 @@ function frame(timestamp: number): void {
 
 function countdownText(n: number): string {
   return n <= 0 ? 'GO' : String(n);
+}
+
+/**
+ * HUD race-position badge (P1/P2): more laps wins; tied laps break by
+ * whoever's further along the current lap's arc length. A simple proxy for
+ * "who's ahead" — not photo-finish precise across lanes of slightly
+ * different length, which is plenty for a vintage-scoreboard indicator.
+ */
+function racePosition(playerLaps: number, playerS: number, aiLaps: number, aiS: number): 1 | 2 {
+  if (playerLaps !== aiLaps) return playerLaps > aiLaps ? 1 : 2;
+  return playerS >= aiS ? 1 : 2;
 }
 
 requestAnimationFrame(frame);
