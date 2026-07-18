@@ -4,11 +4,14 @@
 // the M2 functional-only layout — still minimal and out of the way of the 3D
 // view. M9 removed the "MUTED" badge that used to live here: the persistent
 // top-right sound toggle button (ui/overlays.ts) now carries that state, so
-// this HUD doesn't duplicate it.
+// this HUD doesn't duplicate it. M10 adds a practice-mode header variant and
+// a transient flashMessage() (the practice [ ]/[ ] live stickiness change).
 const STYLE_ID = 'm2-hud-style';
 
 /** The established M8 amber accent. */
 const AMBER = '#ffb454';
+/** How long a flashMessage() stays visible before fading out, in ms (must match the CSS animation duration below). */
+const FLASH_DURATION_MS = 1500;
 
 export interface HudUpdate {
   lap: number;
@@ -19,16 +22,20 @@ export interface HudUpdate {
   sourceLabel: string;
   /** M7: laps to win — renders "LAP n / target" when set (a race). */
   lapTarget?: number;
-  /** M7: the AI opponent's lap count, shown as a second line when set (a race). */
+  /** M7: the AI opponent's lap count, shown as a second line when set (a race, or M10 practice with an AI companion). */
   opponentLap?: number | null;
-  /** M8: 1 (leading) or 2 (trailing) — set only in race mode (an opponent exists to rank against). */
+  /** M8: 1 (leading) or 2 (trailing) — set only in race mode (an opponent exists to rank against; practice never sets this, even with an AI companion — no competition framing). */
   position?: 1 | 2;
   /** M8: show the subtle "squeeze the trigger to connect a gamepad" hint — true until any gamepad has ever been seen. */
   showGamepadHint?: boolean;
+  /** M10: practice mode — replaces the "LAP n" header with "PRACTICE · LAP n". */
+  practice?: boolean;
 }
 
 export interface Hud {
   update(state: HudUpdate): void;
+  /** M10: briefly flash a short message (e.g. a stickiness level name) near the lap counter, fading out over ~1.5s. Re-triggerable — a new call while one is still fading restarts the animation. */
+  flashMessage(text: string): void;
 }
 
 function ensureStyles(): void {
@@ -116,6 +123,30 @@ function ensureStyles(): void {
       background: #5ee06b;
       height: 0%;
     }
+    .m2-hud__flash {
+      position: fixed;
+      top: 56px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 15;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: ${AMBER};
+      text-shadow: 0 0 16px rgba(255, 180, 84, 0.7), 0 2px 8px rgba(0, 0, 0, 0.8);
+      opacity: 0;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    .m2-hud__flash--show {
+      animation: m2-hud-message-flash ${FLASH_DURATION_MS}ms ease-out;
+    }
+    @keyframes m2-hud-message-flash {
+      0% { opacity: 0; transform: translateX(-50%) translateY(-4px); }
+      12% { opacity: 1; transform: translateX(-50%) translateY(0); }
+      75% { opacity: 1; }
+      100% { opacity: 0; }
+    }
   `;
   document.head.appendChild(style);
 }
@@ -167,6 +198,13 @@ export function createHud(container: HTMLElement): Hud {
 
   container.appendChild(root);
 
+  // M10: transient flash message (e.g. the new stickiness level name),
+  // fixed-positioned on its own — not a panel child — so it stays centered
+  // regardless of the panel's own variable width.
+  const flashEl = document.createElement('div');
+  flashEl.className = 'm2-hud__flash';
+  container.appendChild(flashEl);
+
   // Tracks the last bestLapSec we've already flashed for, so the flash
   // fires exactly once per improvement (bestLapSec is monotonically
   // non-increasing per game/race.ts, so "changed" here always means "got
@@ -174,7 +212,11 @@ export function createHud(container: HTMLElement): Hud {
   let lastSeenBest: number | null = null;
 
   function update(state: HudUpdate): void {
-    lapLine.textContent = state.lapTarget ? `LAP ${state.lap}/${state.lapTarget}` : `LAP ${state.lap}`;
+    lapLine.textContent = state.practice
+      ? `PRACTICE · LAP ${state.lap}`
+      : state.lapTarget
+        ? `LAP ${state.lap}/${state.lapTarget}`
+        : `LAP ${state.lap}`;
     if (state.position !== undefined) {
       positionBadge.textContent = `P${state.position}`;
       lapLine.appendChild(positionBadge);
@@ -202,5 +244,12 @@ export function createHud(container: HTMLElement): Hud {
     barFill.style.height = `${(clamped * 100).toFixed(1)}%`;
   }
 
-  return { update };
+  function flashMessage(text: string): void {
+    flashEl.textContent = text;
+    flashEl.classList.remove('m2-hud__flash--show');
+    void flashEl.offsetWidth; // force reflow so re-adding the class restarts the animation, same trick as the best-lap flash
+    flashEl.classList.add('m2-hud__flash--show');
+  }
+
+  return { update, flashMessage };
 }
