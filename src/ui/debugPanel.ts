@@ -75,26 +75,67 @@ function ensureStyles(): void {
   style.id = STYLE_ID;
   style.textContent = `
     .m2-debug {
-      position: fixed;
-      top: 12px;
-      right: 12px;
-      z-index: 10;
-      width: 260px;
+      flex: 0 0 300px;
+      max-height: 100vh;
+      overflow-y: auto;
+      box-sizing: border-box;
       background: rgba(10, 10, 12, 0.85);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: 6px;
+      border-left: 1px solid rgba(255, 255, 255, 0.14);
       padding: 10px 12px 12px;
       font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
       font-size: 11px;
       color: #e8e8e8;
     }
-    .m2-debug h2 {
-      font-size: 11px;
+    .m2-debug--collapsed {
+      display: none;
+    }
+    .m2-debug__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
       margin: 0 0 8px;
+    }
+    .m2-debug__header h2 {
+      font-size: 11px;
+      margin: 0;
       font-weight: 600;
       letter-spacing: 0.06em;
       text-transform: uppercase;
       color: #9fd3ff;
+    }
+    .m2-debug__close {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      line-height: 1;
+      font-size: 12px;
+      color: #e8e8e8;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .m2-debug-reopen {
+      position: fixed;
+      top: 60px;
+      right: 12px;
+      z-index: 110;
+      display: none;
+      font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: #e8e8e8;
+      background: rgba(10, 10, 12, 0.72);
+      border: 1px solid rgba(255, 180, 84, 0.22);
+      border-radius: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    .m2-debug-reopen--visible {
+      display: block;
     }
     .m2-debug__row {
       display: flex;
@@ -135,7 +176,17 @@ function formatNum(n: number): string {
 
 const NOOP_PANEL: DebugPanel = { sample() {} };
 
-export function createDebugPanel(tuning: Tuning): DebugPanel {
+/**
+ * `flexRoot` is the app's horizontal flex row (main.ts's `#app`) — the panel
+ * docks into it as a right-hand sibling COLUMN of the canvas host, never an
+ * overlay on top of the 3D view (M9 follow-up). `canvasHost` is the flex
+ * sibling the 3D view actually renders into: the small "TUNE" reopen tab
+ * mounts there instead (rather than inside the collapsible column itself,
+ * which disappears when collapsed) so it shares the canvas's own
+ * position:fixed containing block/stacking context with the HUD and sound
+ * toggle — "near but not colliding with the sound button," per the brief.
+ */
+export function createDebugPanel(flexRoot: HTMLElement, canvasHost: HTMLElement, tuning: Tuning): DebugPanel {
   if (!shouldRender()) {
     return NOOP_PANEL;
   }
@@ -145,9 +196,17 @@ export function createDebugPanel(tuning: Tuning): DebugPanel {
   const root = document.createElement('div');
   root.className = 'm2-debug';
 
+  const header = document.createElement('div');
+  header.className = 'm2-debug__header';
   const heading = document.createElement('h2');
   heading.textContent = 'Tuning';
-  root.appendChild(heading);
+  const closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.className = 'm2-debug__close';
+  closeButton.textContent = '✕';
+  closeButton.setAttribute('aria-label', 'Collapse tuning panel');
+  header.append(heading, closeButton);
+  root.appendChild(header);
 
   const modeRow = document.createElement('div');
   modeRow.className = 'm2-debug__row';
@@ -224,7 +283,30 @@ export function createDebugPanel(tuning: Tuning): DebugPanel {
   root.appendChild(canvas);
   const ctx = canvas.getContext('2d');
 
-  document.body.appendChild(root);
+  flexRoot.appendChild(root);
+
+  // Small standalone reopen tab — lives in canvasHost (not inside `root`,
+  // which goes display:none while collapsed) so there's always something to
+  // click. Positioned just below the sound toggle button rather than beside
+  // it, so it never collides regardless of the button's ON/OFF label width.
+  const reopenTab = document.createElement('button');
+  reopenTab.type = 'button';
+  reopenTab.className = 'm2-debug-reopen';
+  reopenTab.textContent = 'TUNE';
+  reopenTab.setAttribute('aria-label', 'Open tuning panel');
+  canvasHost.appendChild(reopenTab);
+
+  // Collapsing hides the column entirely (a `display:none` flex sibling
+  // frees its space, so canvasHost's ResizeObserver — see render/scene.ts —
+  // picks up the resulting box-size change and re-fits the renderer
+  // automatically; no explicit resize call needed here). State is plain
+  // in-memory, intentionally not persisted across reloads.
+  function setCollapsed(collapsed: boolean): void {
+    root.classList.toggle('m2-debug--collapsed', collapsed);
+    reopenTab.classList.toggle('m2-debug-reopen--visible', collapsed);
+  }
+  closeButton.addEventListener('click', () => setCollapsed(true));
+  reopenTab.addEventListener('click', () => setCollapsed(false));
 
   const samples: DebugPanelSample[] = [];
 

@@ -564,7 +564,38 @@ function init(): void {
   showDebug = params.has('debug');
   const quality = readQuality(params.get('quality'));
 
-  const sceneHandle = createScene(container, { quality });
+  // `#app` is a horizontal flex row (index.html) so the dev tuning panel
+  // (createDebugPanel, below) can dock as a right-hand sibling COLUMN
+  // without ever overlaying the 3D view (M9 follow-up — it used to be a
+  // fixed-position overlay on top of the canvas). canvasHost is the flex:1
+  // child the renderer actually fills; when the panel isn't rendered
+  // (production without ?tune — createDebugPanel's own shouldRender() gate
+  // gets the final say) canvasHost is #app's ONLY child and fills 100% of
+  // it, identical to the old plain (non-flex) layout.
+  //
+  // `contain: layout` makes canvasHost the containing block for every
+  // position:fixed overlay mounted into it below (HUD, sound toggle,
+  // countdown, calibration wizard, the menus/gate) — so their top/right/
+  // inset values resolve against the CANVAS's own box, not the full window,
+  // and correctly stop short of the panel column's width instead of drifting
+  // under it. It also — unavoidably, the two are a package deal in CSS —
+  // gives canvasHost its own stacking context, which is harmless here only
+  // because EVERY z-indexed overlay now lives inside it, so their relative
+  // stacking order (hud 10 < countdown 50 < calibration 60 < menus/gate
+  // 100 < sound toggle/reopen tab 110) is preserved exactly as before.
+  const canvasHost = document.createElement('div');
+  canvasHost.id = 'canvas-host';
+  Object.assign(canvasHost.style, {
+    position: 'relative',
+    flex: '1 1 auto',
+    minWidth: '0', // flexbox's default min-width:auto can otherwise refuse to shrink the canvas below its last-rendered width
+    height: '100%',
+    overflow: 'hidden',
+    contain: 'layout',
+  });
+  container.appendChild(canvasHost);
+
+  const sceneHandle = createScene(canvasHost, { quality });
   scene = sceneHandle.scene;
   camera = sceneHandle.camera;
   keyLight = sceneHandle.keyLight;
@@ -586,25 +617,25 @@ function init(): void {
     muted = !loadSoundPref();
 
     inputManager = createInputManager();
-    hud = createHud(document.body);
-    debugPanel = createDebugPanel(TUNING);
-    menu = createMenuSystem(document.body);
-    countdown = createCountdownOverlay(document.body);
-    calibrationOverlay = createCalibrationOverlay(document.body);
+    hud = createHud(canvasHost);
+    debugPanel = createDebugPanel(container, canvasHost, TUNING);
+    menu = createMenuSystem(canvasHost);
+    countdown = createCountdownOverlay(canvasHost);
+    calibrationOverlay = createCalibrationOverlay(canvasHost);
     qualityLadder = createQualityLadder(sceneHandle, quality);
 
     // A static default session sits behind the gate/menu so the table isn't empty.
     buildSession(DEFAULT_CONFIG);
 
     // The one valid place to unlock WebAudio — then straight into the menu.
-    createStartGate(document.body, !muted, () => {
+    createStartGate(canvasHost, !muted, () => {
       const newEngine = createAudioEngine();
       newEngine.ensureRunning();
       engine = newEngine;
       sfx = createSfx(newEngine);
       attachVoices(); // the default session predates audio; give it voices now
       applyMuted(); // silence the fresh (always-unmuted-by-construction) engine if the loaded/default preference is off
-      soundToggle = createSoundToggle(document.body, { initialOn: !muted, onToggle: toggleSound });
+      soundToggle = createSoundToggle(canvasHost, { initialOn: !muted, onToggle: toggleSound });
       openMenu();
     });
   }

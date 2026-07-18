@@ -1,16 +1,19 @@
 // @vitest-environment jsdom
 //
-// Regression guard for the DOM-only UI layer (overlays.ts, plus hud.ts and
-// menus.ts extracted alongside it): the imports below ARE the guard against
-// a module-evaluation-time ReferenceError (a top-level call reading a
-// const/let before its own declaration has run — the bug class main.ts's
-// init() restructure closes off). If any of these files regressed to
-// invoking something eagerly at module scope out of order, the import
-// itself would throw and this whole file would fail to collect, before any
-// assertion below even runs. vitest's project-wide default environment is
-// 'node' (see vite.config.ts) — the pragma above opts this file alone into
-// jsdom so `document` exists here without affecting any other test file.
-import { describe, expect, it } from 'vitest';
+// Regression guard for the DOM-only UI layer (overlays.ts, plus hud.ts,
+// menus.ts, and debugPanel.ts extracted/exercised alongside it): the imports
+// below ARE the guard against a module-evaluation-time ReferenceError (a
+// top-level call reading a const/let before its own declaration has run —
+// the bug class main.ts's init() restructure closes off). If any of these
+// files regressed to invoking something eagerly at module scope out of
+// order, the import itself would throw and this whole file would fail to
+// collect, before any assertion below even runs. vitest's project-wide
+// default environment is 'node' (see vite.config.ts) — the pragma above opts
+// this file alone into jsdom so `document` exists here without affecting any
+// other test file.
+import { afterEach, describe, expect, it } from 'vitest';
+import { TUNING } from '../config/tuning';
+import { createDebugPanel } from './debugPanel';
 import { createHud } from './hud';
 import { createMenuSystem, createStartGate } from './menus';
 import { createCalibrationOverlay, createCountdownOverlay, createSoundToggle } from './overlays';
@@ -121,6 +124,48 @@ describe('createSoundToggle', () => {
     expect(() => createSoundToggle(hostA, { initialOn: false, onToggle: () => {} })).not.toThrow();
     expect(() => createSoundToggle(hostB, { initialOn: false, onToggle: () => {} })).not.toThrow();
     expect(document.querySelectorAll('#m9-sound-toggle-style').length).toBe(1);
+  });
+});
+
+describe('createDebugPanel', () => {
+  // shouldRender() renders whenever import.meta.env.DEV OR ?tune is set;
+  // forcing ?tune here (rather than relying on vitest's DEV mode happening
+  // to be truthy) makes this test's outcome independent of that.
+  afterEach(() => {
+    window.history.pushState({}, '', '/');
+  });
+
+  it('docks the column into flexRoot (not canvasHost) and mounts the reopen tab into canvasHost, collapse <-> reopen toggling both', () => {
+    window.history.pushState({}, '', '/?tune');
+    const flexRoot = document.createElement('div');
+    const canvasHost = document.createElement('div');
+    const panel = createDebugPanel(flexRoot, canvasHost, { ...TUNING });
+
+    expect(() => panel.sample({ v: 0, throttle: 0 })).not.toThrow();
+
+    const column = flexRoot.querySelector('.m2-debug');
+    expect(column).not.toBeNull();
+    expect(canvasHost.querySelector('.m2-debug')).toBeNull(); // the column itself is NOT in canvasHost
+
+    const closeButton = column!.querySelector('.m2-debug__close');
+    expect(closeButton).not.toBeNull();
+    expect(closeButton!.getAttribute('aria-label')).toBeTruthy();
+
+    const reopenTab = canvasHost.querySelector('.m2-debug-reopen');
+    expect(reopenTab).not.toBeNull();
+    expect(flexRoot.querySelector('.m2-debug-reopen')).toBeNull(); // the reopen tab is NOT in flexRoot
+
+    // Starts expanded: column visible, reopen tab hidden.
+    expect(column!.classList.contains('m2-debug--collapsed')).toBe(false);
+    expect(reopenTab!.classList.contains('m2-debug-reopen--visible')).toBe(false);
+
+    (closeButton as HTMLButtonElement).click();
+    expect(column!.classList.contains('m2-debug--collapsed')).toBe(true);
+    expect(reopenTab!.classList.contains('m2-debug-reopen--visible')).toBe(true);
+
+    (reopenTab as HTMLButtonElement).click();
+    expect(column!.classList.contains('m2-debug--collapsed')).toBe(false);
+    expect(reopenTab!.classList.contains('m2-debug-reopen--visible')).toBe(false);
   });
 });
 
