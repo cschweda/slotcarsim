@@ -276,4 +276,23 @@ describe('createTrackMesh (figure-8 crossing)', () => {
     // a single continuous rail. (Un-gapped would be 8 quads = 32 verts.)
     expect(sq.rail!.getAttribute('position').count).toBe(96);
   });
+
+  // buildCrossingSquare's quads are hand-wound (crossRect), unlike the swept
+  // ribbons elsewhere in this file which derive their winding parametrically
+  // (sweepRibbon's `flip`). A single flipped index order anywhere in the
+  // hand-authored winding would invert that quad's computed normal to point
+  // down through the table instead of up at the camera — this smoke test
+  // guards against that regressing silently.
+  it('every crossing-square quad has an up-pointing normal (guards the hand-wound winding)', () => {
+    const sq = buildCrossingSquare({ x: 0.1, y: -0.2 }, Math.PI / 5);
+    for (const geom of [sq.road, sq.slot, sq.rail]) {
+      expect(geom).not.toBeNull();
+      geom!.computeVertexNormals();
+      const normal = geom!.getAttribute('normal');
+      expect(normal.count).toBeGreaterThan(0);
+      for (let i = 0; i < normal.count; i++) {
+        expect(normal.getY(i)).toBeGreaterThan(0);
+      }
+    }
+  });
 });
