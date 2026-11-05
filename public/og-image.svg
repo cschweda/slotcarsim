@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <!-- Shag carpet: burnt-orange base roughened with fractal noise -->
+    <filter id="shag" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9 0.35" numOctaves="3" seed="7" result="n"/>
+      <feColorMatrix in="n" type="matrix" values="0 0 0 0 0.10  0 0 0 0 0.05  0 0 0 0 0.01  0 0 0 1.8 -0.5" result="tuft"/>
+      <feComposite in="tuft" in2="SourceGraphic" operator="over"/>
+    </filter>
+    <radialGradient id="lamp" cx="0.68" cy="0.5" r="0.75">
+      <stop offset="0" stop-color="#b8571c"/>
+      <stop offset="0.55" stop-color="#7a3410"/>
+      <stop offset="1" stop-color="#2a1206"/>
+    </radialGradient>
+    <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.5" stop-color="#9aa0a6"/>
+      <stop offset="1" stop-color="#e6e8ea"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8e0f0f"/>
+      <stop offset="0.5" stop-color="#e3261f"/>
+      <stop offset="1" stop-color="#8e0f0f"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0d2f6b"/>
+      <stop offset="0.5" stop-color="#2f74d0"/>
+      <stop offset="1" stop-color="#0d2f6b"/>
+    </linearGradient>
+    <filter id="drop" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6"/>
+      <feOffset dx="5" dy="9"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.6"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <!-- Top-down HO car, nose pointing +x, ~64 x 30 -->
+    <g id="car-red">
+      <rect x="-30" y="-16" width="11" height="32" rx="3" fill="#111"/>
+      <rect x="17" y="-16" width="11" height="32" rx="3" fill="#111"/>
+      <path d="M-32,-12 Q-32,-14 -28,-14 L22,-13 Q34,-11 35,0 Q34,11 22,13 L-28,14 Q-32,14 -32,12 Z" fill="url(#red)"/>
+      <path d="M-6,-9 L10,-8 Q16,0 10,8 L-6,9 Q-9,0 -6,-9 Z" fill="#1d2a33" opacity="0.92"/>
+      <path d="M-4,-7 L6,-6" stroke="#bfe3ff" stroke-width="1.5" opacity="0.7"/>
+      <rect x="-31" y="-3" width="66" height="6" fill="#fff4e6" opacity="0.9"/>
+      <rect x="30" y="-10" width="4" height="5" rx="1" fill="url(#chrome)"/>
+      <rect x="30" y="5" width="4" height="5" rx="1" fill="url(#chrome)"/>
+    </g>
+        <g id="car-blue">
+      <rect x="-30" y="-16" width="11" height="32" rx="3" fill="#111"/>
+      <rect x="17" y="-16" width="11" height="32" rx="3" fill="#111"/>
+      <path d="M-32,-12 Q-32,-14 -28,-14 L22,-13 Q34,-11 35,0 Q34,11 22,13 L-28,14 Q-32,14 -32,12 Z" fill="url(#blue)"/>
+      <path d="M-6,-9 L10,-8 Q16,0 10,8 L-6,9 Q-9,0 -6,-9 Z" fill="#1d2a33" opacity="0.92"/>
+      <path d="M-4,-7 L6,-6" stroke="#bfe3ff" stroke-width="1.5" opacity="0.7"/>
+      <rect x="-31" y="-3" width="66" height="6" fill="#fff4e6" opacity="0.9"/>
+      <rect x="30" y="-10" width="4" height="5" rx="1" fill="url(#chrome)"/>
+      <rect x="30" y="5" width="4" height="5" rx="1" fill="url(#chrome)"/>
+    </g>
+  </defs>
+
+  <!-- Carpet -->
+  <rect width="1200" height="630" fill="url(#lamp)" filter="url(#shag)"/>
+
+  <!-- Track: stadium oval of two-lane plastic track, tilted -->
+  <g transform="translate(860 330) rotate(-14)" filter="url(#drop)">
+    <rect x="-300" y="-200" width="600" height="400" rx="200" fill="none" stroke="#2b2b2e" stroke-width="96"/>
+    <rect x="-300" y="-200" width="600" height="400" rx="200" fill="none" stroke="#3a3a3e" stroke-width="88"/>
+    <!-- outer lane: rails + slot -->
+    <rect x="-322" y="-222" width="644" height="444" rx="222" fill="none" stroke="#c9ccd0" stroke-width="10"/>
+    <rect x="-322" y="-222" width="644" height="444" rx="222" fill="none" stroke="#3a3a3e" stroke-width="4"/>
+    <rect x="-322" y="-222" width="644" height="444" rx="222" fill="none" stroke="#050505" stroke-width="2.6"/>
+    <!-- inner lane -->
+    <rect x="-278" y="-178" width="556" height="356" rx="178" fill="none" stroke="#c9ccd0" stroke-width="10"/>
+    <rect x="-278" y="-178" width="556" height="356" rx="178" fill="none" stroke="#3a3a3e" stroke-width="4"/>
+    <rect x="-278" y="-178" width="556" height="356" rx="178" fill="none" stroke="#050505" stroke-width="2.6"/>
+    <!-- section joints -->
+    <g stroke="#1f1f22" stroke-width="2">
+      <line x1="-100" y1="-248" x2="-100" y2="-152"/>
+      <line x1="100" y1="-248" x2="100" y2="-152"/>
+      <line x1="-100" y1="152" x2="-100" y2="248"/>
+      <line x1="100" y1="152" x2="100" y2="248"/>
+    </g>
+    <!-- start/finish -->
+    <g transform="translate(0 200)">
+      <rect x="-6" y="-46" width="12" height="92" fill="#f2efe6"/>
+      <g fill="#111">
+        <rect x="-6" y="-46" width="6" height="6"/><rect x="0" y="-40" width="6" height="6"/>
+        <rect x="-6" y="-34" width="6" height="6"/><rect x="0" y="-28" width="6" height="6"/>
+        <rect x="-6" y="-22" width="6" height="6"/><rect x="0" y="-16" width="6" height="6"/>
+        <rect x="-6" y="-10" width="6" height="6"/><rect x="0" y="-4" width="6" height="6"/>
+        <rect x="-6" y="2" width="6" height="6"/><rect x="0" y="8" width="6" height="6"/>
+        <rect x="-6" y="14" width="6" height="6"/><rect x="0" y="20" width="6" height="6"/>
+        <rect x="-6" y="26" width="6" height="6"/><rect x="0" y="32" width="6" height="6"/>
+        <rect x="-6" y="38" width="6" height="6"/>
+      </g>
+    </g>
+    <!-- blue car on the inner lane, bottom straight, heading +x -->
+    <use xlink:href="#car-blue" transform="translate(-60 178)"/>
+  </g>
+
+  <!-- Red car: overcooked the corner, flying off into the shag -->
+  <g opacity="0.55" stroke="#ffd9a0" stroke-linecap="round" stroke-width="4">
+    <line x1="1030" y1="118" x2="1090" y2="82"/>
+    <line x1="1046" y1="140" x2="1102" y2="110"/>
+    <line x1="1014" y1="98" x2="1060" y2="70"/>
+  </g>
+  <g filter="url(#drop)">
+    <use xlink:href="#car-red" transform="translate(1108 84) rotate(-62) scale(1.15)"/>
+  </g>
+
+  <!-- Seventies stripes -->
+  <g transform="translate(0 452) skewX(-18)">
+    <rect x="-40" y="0" width="760" height="14" fill="#f4b223"/>
+    <rect x="-40" y="20" width="760" height="14" fill="#e8741e"/>
+    <rect x="-40" y="40" width="760" height="14" fill="#c4361c"/>
+  </g>
+
+  <!-- Title block -->
+  <g font-family="Futura" font-weight="800" font-stretch="condensed" fill="#fff4e6">
+    <g transform="translate(110 0) skewX(-10)">
+      <text x="0" y="180" font-size="132" letter-spacing="2" fill="#2a1206" opacity="0.55" transform="translate(6 7)">AFX</text>
+      <text x="0" y="180" font-size="132" letter-spacing="2">AFX</text>
+      <text x="0" y="282" font-size="90" fill="#2a1206" opacity="0.55" transform="translate(5 6)">SLOT CAR</text>
+      <text x="0" y="282" font-size="90" fill="#f4b223">SLOT CAR</text>
+      <text x="0" y="380" font-size="90" fill="#2a1206" opacity="0.55" transform="translate(5 6)">SIMULATOR</text>
+      <text x="0" y="380" font-size="90" fill="#f4b223">SIMULATOR</text>
+    </g>
+  </g>
+  <text x="64" y="548" font-family="Avenir Next" font-weight="600" font-size="27" fill="#fff4e6">Squeeze the trigger. Brake into the corner.</text>
+  <text x="64" y="584" font-family="Avenir Next" font-weight="600" font-size="27" fill="#fff4e6">Or fly off into the shag carpet.</text>
+  <text x="1136" y="596" text-anchor="end" font-family="Menlo" font-size="20" fill="#ffd9a0" opacity="0.85">slotcar.netlify.app</text>
+</svg>
